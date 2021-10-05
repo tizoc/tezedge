@@ -7,7 +7,7 @@ use crypto::hash::ProtocolHash;
 use serial_test::serial;
 use tezos_api::environment::{self, TezosEnvironment};
 use tezos_api::ffi::{InitProtocolContextResult, TezosRuntimeConfiguration};
-use tezos_client::client;
+use tezos_protocol_ipc_client as client;
 use tezos_context_api::{
     TezosContextConfiguration, TezosContextIrminStorageConfiguration,
     TezosContextStorageConfiguration, TezosContextTezEdgeStorageConfiguration,

@@ -14,7 +14,7 @@ use tezos_api::ffi::{
     ApplyBlockError, ApplyBlockRequest, BeginApplicationRequest, InitProtocolContextResult,
     TezosRuntimeConfiguration,
 };
-use tezos_client::client;
+use tezos_protocol_ipc_client as client;
 use tezos_context_api::{
     TezosContextConfiguration, TezosContextIrminStorageConfiguration,
     TezosContextStorageConfiguration, TezosContextTezEdgeStorageConfiguration,

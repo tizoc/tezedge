@@ -17,7 +17,7 @@ use tezos_api::{
     },
     ffi::{ProtocolRpcResponse, RpcMethod},
 };
-use tezos_client::client;
+use tezos_protocol_ipc_client as client;
 use tezos_context_api::{
     TezosContextConfiguration, TezosContextIrminStorageConfiguration,
     TezosContextStorageConfiguration, TezosContextTezEdgeStorageConfiguration,

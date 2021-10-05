@@ -18,3 +18,12 @@ tezos_api = { path = "../api" }
 tezos_messages = { path = "../messages" }
 tezos_protocol_ipc_messages = { path = "../protocol-ipc-messages" }
 tezos_context_api = { path = "../context-api" }
+
+[dev-dependencies]
+anyhow = "1.0"
+assert-json-diff = "2"
+strum = "0.20"
+thiserror = "1.0"
+hex = "0.4"
+serde_json = "1.0"
+serial_test = "0.5"

@@ -3536,10 +3536,16 @@ dependencies = [
 name = "tezos_protocol_ipc_client"
 version = "1.9.0"
 dependencies = [
+ "anyhow",
+ "assert-json-diff 2.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "async_ipc",
  "crypto",
+ "hex",
  "nix 0.19.1",
+ "serde_json",
+ "serial_test",
  "slog",
+ "strum",
  "tezos_api",
  "tezos_context_api",
  "tezos_messages",

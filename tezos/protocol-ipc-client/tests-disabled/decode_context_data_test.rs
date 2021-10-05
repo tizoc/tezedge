@@ -7,7 +7,7 @@ use serial_test::serial;
 
 use crypto::hash::ProtocolHash;
 use tezos_api::ffi::TezosRuntimeConfiguration;
-use tezos_client::client;
+use tezos_protocol_ipc_client as client;
 
 fn protocol(hash: &str) -> ProtocolHash {
     ProtocolHash::from_base58_check(hash).unwrap()

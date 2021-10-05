@@ -8,7 +8,7 @@ use strum::IntoEnumIterator;
 use crypto::hash::{ContextHash, ProtocolHash};
 use tezos_api::environment::{default_networks, TezosEnvironment, TezosEnvironmentConfiguration};
 use tezos_api::ffi::TezosRuntimeConfiguration;
-use tezos_client::client;
+use tezos_protocol_ipc_client as client;
 use tezos_context_api::{
     PatchContext, TezosContextConfiguration, TezosContextIrminStorageConfiguration,
     TezosContextStorageConfiguration, TezosContextTezEdgeStorageConfiguration,
