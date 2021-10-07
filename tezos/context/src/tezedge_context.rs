@@ -295,8 +295,7 @@ impl TezedgeIndex {
         let mut out = StringDirectoryMap::new();
         let commit = self.get_commit(object_ref, storage)?;
 
-        let root_hash_ref = ObjectReference::new(Some(commit.root_hash), commit.root_hash_offset);
-        let root_dir_id = self.get_directory(root_hash_ref, storage)?;
+        let root_dir_id = self.get_directory(commit.root_hash_ref, storage)?;
         let prefixed_dir_id = self.find_or_create_directory(root_dir_id, prefix, storage)?;
         let delimiter = if prefix.is_empty() { "" } else { "/" };
 
@@ -455,8 +454,7 @@ impl TezedgeIndex {
 
         let commit = self.get_commit(object_ref, &mut storage)?;
 
-        let obj_ref = ObjectReference::new(Some(commit.root_hash), commit.root_hash_offset);
-        let dir_id = self.get_directory(obj_ref, &mut storage)?;
+        let dir_id = self.get_directory(commit.root_hash_ref, &mut storage)?;
 
         let blob_id = self.try_find_blob(dir_id, key, &mut storage)?;
         let blob = storage.get_blob(blob_id)?;
@@ -508,8 +506,7 @@ impl TezedgeIndex {
 
         let commit = self.get_commit(object_ref, &mut storage)?;
 
-        let obj_ref = ObjectReference::new(Some(commit.root_hash), commit.root_hash_offset);
-        let root_dir_id = self.get_directory(obj_ref, &mut storage)?;
+        let root_dir_id = self.get_directory(commit.root_hash_ref, &mut storage)?;
         self.get_context_key_values_by_prefix_impl(root_dir_id, prefix, &mut storage)
     }
 
@@ -587,10 +584,7 @@ impl TezedgeIndex {
                     })
                     .unwrap_or(Ok(()))
             }
-            Object::Commit(commit) => match self.get_object(
-                ObjectReference::new(Some(commit.root_hash), commit.root_hash_offset),
-                storage,
-            ) {
+            Object::Commit(commit) => match self.get_object(commit.root_hash_ref, storage) {
                 Err(err) => Err(err),
                 Ok(object) => {
                     self.collect_key_values_from_tree_recursively(path, &object, entries, storage)
@@ -679,8 +673,7 @@ impl IndexApi<TezedgeContext> for TezedgeIndex {
 
             // println!("CHECKOUT COMMIT={:?}", commit);
 
-            let obj_ref = ObjectReference::new(Some(commit.root_hash), commit.root_hash_offset);
-            match self.fetch_directory(obj_ref, &mut storage)? {
+            match self.fetch_directory(commit.root_hash_ref, &mut storage)? {
                 Some(dir_id) => dir_id,
                 None => return Ok(None),
             }
