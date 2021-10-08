@@ -137,7 +137,7 @@ impl TezedgeIndex {
     ) -> Result<Object, MerkleError> {
         match self.fetch_object(object_ref, storage)? {
             None => Err(MerkleError::ObjectNotFound {
-                hash_id: (object_ref.offset() as usize).try_into().unwrap(),
+                object_ref: object_ref,
             }),
             Some(object) => Ok(object),
         }
@@ -175,7 +175,7 @@ impl TezedgeIndex {
     ) -> Result<Commit, MerkleError> {
         match self.fetch_commit(object_ref, storage)? {
             None => Err(MerkleError::ObjectNotFound {
-                hash_id: HashId::new(object_ref.offset() as u32).unwrap(),
+                object_ref: object_ref,
             }),
             Some(object) => Ok(object),
         }
@@ -216,7 +216,7 @@ impl TezedgeIndex {
     ) -> Result<DirectoryId, MerkleError> {
         match self.fetch_directory(object_ref, storage)? {
             None => Err(MerkleError::ObjectNotFound {
-                hash_id: HashId::new(object_ref.offset() as u32).unwrap(),
+                object_ref: object_ref,
             }),
             Some(object) => Ok(object),
         }
@@ -725,7 +725,7 @@ impl IndexApi<TezedgeContext> for TezedgeIndex {
 
         match self.get_history(object_ref, key) {
             Err(MerkleError::ValueNotFound { key: _ }) => Ok(None),
-            Err(MerkleError::ObjectNotFound { hash_id: _ }) => Ok(None),
+            Err(MerkleError::ObjectNotFound { .. }) => Ok(None),
             Err(err) => Err(ContextError::MerkleStorageError { error: err }),
             Ok(val) => Ok(Some(val)),
         }
@@ -1039,7 +1039,7 @@ impl TezedgeContext {
             Some(hash) => hash,
             None => {
                 return Err(MerkleError::ObjectNotFound {
-                    hash_id: commit_ref.hash_id(),
+                    object_ref: commit_ref,
                 }
                 .into())
             }
