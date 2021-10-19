@@ -3394,7 +3394,7 @@ dependencies = [
 
 [[package]]
 name = "tezos_context_api"
-version = "1.8.0"
+version = "1.9.0"
 dependencies = [
  "chrono",
  "crypto",
@@ -3409,7 +3409,7 @@ dependencies = [
 
 [[package]]
 name = "tezos_context_ipc_client"
-version = "1.8.0"
+version = "1.9.0"
 dependencies = [
  "async_ipc",
  "crypto",
@@ -3420,7 +3420,7 @@ dependencies = [
 
 [[package]]
 name = "tezos_conv"
-version = "1.8.0"
+version = "1.9.0"
 dependencies = [
  "crypto",
  "ocaml-interop",
@@ -3554,7 +3554,7 @@ dependencies = [
 
 [[package]]
 name = "tezos_protocol_ipc_messages"
-version = "1.8.0"
+version = "1.9.0"
 dependencies = [
  "crypto",
  "serde 1.0.130",
