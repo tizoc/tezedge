@@ -116,6 +116,7 @@
 
 pub mod gc;
 pub mod hash;
+pub mod serialize;
 pub mod working_tree;
 
 pub mod ffi;
