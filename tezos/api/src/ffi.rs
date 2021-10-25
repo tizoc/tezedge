@@ -115,6 +115,7 @@ pub struct TezosContextIrminStorageConfiguration {
 pub enum ContextKvStoreConfiguration {
     ReadOnlyIpc,
     InMem,
+    OnDisk,
 }
 
 // Must be in sync with ffi_config.ml
