@@ -175,7 +175,8 @@ impl ProtocolRunnerInstance {
     pub async fn writable_connection(&mut self) -> Result<ProtocolRunnerConnection, IpcError> {
         if self.shutdown_issued {
             return Err(IpcError::OtherError {
-                reason: "Cannot get a connection to a protocol runner that has been shutdown".to_string(),
+                reason: "Cannot get a connection to a protocol runner that has been shutdown"
+                    .to_string(),
             });
         }
 
@@ -221,7 +222,7 @@ impl ProtocolRunnerInstance {
         timeout: Option<Duration>,
     ) -> Result<(), ProtocolRunnerError> {
         let start = Instant::now();
-        let timeout = timeout.unwrap_or(Duration::from_secs(3));
+        let timeout = timeout.unwrap_or_else(|| Duration::from_secs(3));
 
         loop {
             if self.socket_path.exists() {
@@ -239,7 +240,7 @@ impl ProtocolRunnerInstance {
     }
 
     fn spawn_process(
-        executable_path: &PathBuf,
+        executable_path: &Path,
         socket_path: &Path,
         endpoint_name: &str,
         log_level: &Level,
@@ -433,11 +434,12 @@ impl IpcIO {
         &mut self,
         read_timeout: Option<Duration>,
     ) -> Result<NodeMessage, async_ipc::IpcError> {
-        if let Some(read_timeout) = read_timeout {
-            Ok(self.rx.try_receive(read_timeout).await?)
+        let result = if let Some(read_timeout) = read_timeout {
+            self.rx.try_receive(read_timeout).await?
         } else {
-            self.rx.receive().await
-        }
+            self.rx.receive().await?
+        };
+        Ok(result)
     }
 }
 
@@ -491,7 +493,7 @@ impl ProtocolRunnerApi {
 
     pub fn shutdown_on_drop(self: &Arc<Self>) -> ProtocolRunnerApiShutdownGuard {
         ProtocolRunnerApiShutdownGuard {
-            api: Arc::clone(&self),
+            api: Arc::clone(self),
         }
     }
 

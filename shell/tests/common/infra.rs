@@ -74,8 +74,6 @@ impl NodeInfrastructure {
         identity: Identity,
         pow_target: f64,
         (log, log_level): (Logger, Level),
-        // TODO: runtime configuration
-        (record_also_readonly_context_action, compute_context_action_tree_hashes): (bool, bool),
     ) -> Result<Self, anyhow::Error> {
         warn!(log, "[NODE] Starting node infrastructure"; "name" => name);
 

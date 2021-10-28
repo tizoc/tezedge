@@ -118,18 +118,17 @@ impl MempoolPrevalidator {
                             &log,
                         ) {
                             Ok(()) => {
-                                //protocol_controller.set_release_on_return_to_pool();
                                 info!(log, "Mempool - prevalidation process finished")
                             }
                             Err(err) => {
-                                //protocol_controller.set_release_on_return_to_pool();
                                 if validator_run.load(Ordering::Acquire) {
                                     warn!(log, "Mempool - error while process prevalidation"; "reason" => format!("{:?}", err));
                                 }
                             }
                         },
-                        Err(_err) => {
-                            //warn!(log, "Mempool - no protocol runner connection available (try next turn)!"; "pool_name" => tezos_readonly_api.pool_name.clone(), "reason" => format!("{:?}", err))
+                        Err(err) => {
+                            // TODO: this cannot happen anymore, there are no pools and protocol runners always accept connections
+                            warn!(log, "Mempool - no protocol runner connection available (try next turn)!"; "reason" => format!("{:?}", err))
                         }
                     }
                 }
