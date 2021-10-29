@@ -254,7 +254,11 @@ pub fn prevalidate_operation(
 
     let mempool_head = match mempool_state.head().as_ref() {
         Some(head) => match block_storage.get(head)? {
-            Some(head) => head,
+            Some(head) => {
+                // release lock asap
+                drop(mempool_state);
+                head
+            }
             None => {
                 return Err(PrevalidateOperationError::UnknownBranch {
                     branch: head.to_base58_check(),

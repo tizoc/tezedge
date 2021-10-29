@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rand::Rng;
-use slog::{info, warn, Logger};
+use slog::{debug, info, warn, Logger};
 use tezedge_actor_system::actors::*;
 
 use crypto::hash::{BlockHash, ChainId};
@@ -442,7 +442,7 @@ impl Receive<StartBranchBootstraping> for PeerBranchBootstrapper {
         _: Option<BasicActorRef>,
     ) {
         let log = ctx.system.log();
-        info!(log, "Start branch bootstrapping process";
+        debug!(log, "Start branch bootstrapping process";
             "last_applied_block" => msg.last_applied_block.to_base58_check(),
             "missing_history" => msg.missing_history
                 .iter()

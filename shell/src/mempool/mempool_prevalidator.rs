@@ -21,12 +21,10 @@ use thiserror::Error;
 
 use crypto::hash::{BlockHash, ChainId, OperationHash};
 use shell_integration::{
-    dispatch_oneshot_result, MempoolError, MempoolOperationReceived, OneshotResultCallback,
-    ResetMempool,
+    dispatch_oneshot_result, MempoolError, MempoolOperationReceived, ResetMempool,
 };
 use shell_integration::{StreamCounter, ThreadRunningStatus, ThreadWatcher};
 use storage::chain_meta_storage::{ChainMetaStorage, ChainMetaStorageReader};
-use storage::mempool_storage::MempoolOperationType;
 use storage::{BlockHeaderWithHash, PersistentStorage};
 use storage::{BlockStorage, BlockStorageReader, MempoolStorage, StorageError};
 use tezos_api::ffi::{
@@ -49,11 +47,7 @@ pub struct MempoolPrevalidator {
 
 enum Event {
     NewHead(Arc<BlockHeaderWithHash>),
-    ValidateOperation(
-        OperationHash,
-        MempoolOperationType,
-        Option<OneshotResultCallback<Result<(), MempoolError>>>,
-    ),
+    ValidateOperation(MempoolOperationReceived),
     ShuttingDown,
 }
 
@@ -101,7 +95,7 @@ impl MempoolPrevalidator {
                             &block_storage,
                             &chain_meta_storage,
                             &mempool_storage,
-                            current_mempool_state_storage.clone(),
+                            &current_mempool_state_storage,
                             &chain_id,
                             &validator_run,
                             &chain_manager,
@@ -162,20 +156,11 @@ impl MempoolPrevalidator {
         _: &Context<MempoolPrevalidatorMsg>,
         msg: MempoolOperationReceived,
     ) -> Result<(), Error> {
-        let MempoolOperationReceived {
-            operation_hash,
-            operation_type,
-            result_callback,
-        } = msg;
         // add operation to queue for validation
         self.validator_event_sender
             .lock()
             .map_err(|e| format_err!("Failed to obtain the lock: {:?}", e))?
-            .send(Event::ValidateOperation(
-                operation_hash,
-                operation_type,
-                result_callback,
-            ))?;
+            .send(Event::ValidateOperation(msg))?;
         Ok(())
     }
 
@@ -296,7 +281,7 @@ fn process_prevalidation(
     block_storage: &BlockStorage,
     chain_meta_storage: &ChainMetaStorage,
     mempool_storage: &MempoolStorage,
-    current_mempool_state_storage: CurrentMempoolStateStorageRef,
+    current_mempool_state_storage: &CurrentMempoolStateStorageRef,
     chain_id: &ChainId,
     validator_run: &AtomicBool,
     chain_manager: &ChainManagerRef,
@@ -312,7 +297,7 @@ fn process_prevalidation(
         block_storage,
         chain_meta_storage,
         mempool_storage,
-        current_mempool_state_storage.clone(),
+        &current_mempool_state_storage,
         api,
         chain_id,
         log,
@@ -359,11 +344,13 @@ fn process_prevalidation(
                         debug!(log, "Mempool - new head received, but was ignored"; "received_block_hash" => header.hash.to_base58_check());
                     }
                 }
-                Event::ValidateOperation(oph, mempool_operation_type, result_callback) => {
+                Event::ValidateOperation(MempoolOperationReceived {
+                    operation_hash: oph,
+                    operation_type,
+                    result_callback,
+                }) => {
                     // TODO: handling when operation not exists - can happen?
-                    if let Some(operation) =
-                        mempool_storage.get(mempool_operation_type, oph.clone())?
-                    {
+                    if let Some(operation) = mempool_storage.get(operation_type, oph.clone())? {
                         // TODO: handle and validate pre_filter with operation?
 
                         // try to add to pendings
@@ -404,12 +391,7 @@ fn process_prevalidation(
         }
 
         // 2. lets handle pending operations (if any)
-        handle_pending_operations(
-            chain_manager,
-            api,
-            current_mempool_state_storage.clone(),
-            log,
-        )?;
+        handle_pending_operations(chain_manager, api, current_mempool_state_storage, log)?;
     }
 
     Ok(())
@@ -420,7 +402,7 @@ fn hydrate_state(
     block_storage: &BlockStorage,
     chain_meta_storage: &ChainMetaStorage,
     mempool_storage: &MempoolStorage,
-    current_mempool_state_storage: CurrentMempoolStateStorageRef,
+    current_mempool_state_storage: &CurrentMempoolStateStorageRef,
     api: &ProtocolController,
     chain_id: &ChainId,
     log: &Logger,
@@ -492,7 +474,7 @@ fn begin_construction(
 fn handle_pending_operations(
     chain_manager: &ChainManagerRef,
     api: &ProtocolController,
-    current_mempool_state_storage: CurrentMempoolStateStorageRef,
+    current_mempool_state_storage: &CurrentMempoolStateStorageRef,
     log: &Logger,
 ) -> Result<(), PrevalidationError> {
     // check if we can handle something

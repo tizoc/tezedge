@@ -8,13 +8,14 @@ use std::time::{Duration, Instant};
 
 use tezedge_actor_system::actors::*;
 
+use crate::mempool::CurrentMempoolStateStorageRef;
 use crypto::hash::{BlockHash, OperationHash};
 use networking::PeerId;
 use storage::mempool_storage::MempoolOperationType;
-use storage::BlockHeaderWithHash;
+use storage::{BlockHeaderWithHash, MempoolStorage};
 use tezos_messages::p2p::encoding::block_header::Level;
 use tezos_messages::p2p::encoding::limits;
-use tezos_messages::p2p::encoding::prelude::{GetOperationsMessage, MetadataMessage};
+use tezos_messages::p2p::encoding::prelude::{GetOperationsMessage, Mempool, MetadataMessage};
 
 use crate::state::data_requester::tell_peer;
 use crate::state::synchronization_state::UpdateIsBootstrapped;
@@ -50,16 +51,16 @@ pub struct PeerState {
     pub(crate) current_head_response_last: Instant,
 
     /// Last time we requested mempool operations from the peer
-    pub(crate) mempool_operations_request_last: Instant,
+    pub(crate) mempool_operations_request_last: Option<Instant>,
     /// Last time we received mempool operations from the peer
-    pub(crate) mempool_operations_response_last: Instant,
+    pub(crate) mempool_operations_response_last: Option<Instant>,
 
     /// Missing mempool operation hashes. Peer will be asked to provide operations for those hashes.
     /// After peer is asked for operation, this hash will be moved to `queued_mempool_operations`.
-    pub(crate) missing_mempool_operations: Vec<(OperationHash, MempoolOperationType)>,
+    pub(crate) missing_mempool_operations: Vec<OperationHash>,
     /// Queued mempool operations. This map holds an operation hash and
     /// a tuple of type of a mempool operation with its time to live.
-    pub(crate) queued_mempool_operations: HashMap<OperationHash, MempoolOperationType>,
+    pub(crate) queued_mempool_operations: HashMap<OperationHash, (MempoolOperationType, Instant)>,
 
     /// Collected stats about p2p messages
     pub(crate) message_stats: MessageStats,
@@ -83,8 +84,8 @@ impl PeerState {
             current_head_update_last: Instant::now(),
             current_head_request_last: Instant::now(),
             current_head_response_last: Instant::now(),
-            mempool_operations_request_last: Instant::now(),
-            mempool_operations_response_last: Instant::now(),
+            mempool_operations_request_last: None,
+            mempool_operations_response_last: None,
             message_stats: MessageStats::default(),
         }
     }
@@ -132,26 +133,71 @@ impl PeerState {
         self.missing_operations_for_blocks.clear();
     }
 
-    pub fn add_missing_mempool_operations(
-        &mut self,
-        operation_hash: OperationHash,
-        mempool_type: MempoolOperationType,
-    ) {
-        if self
-            .missing_mempool_operations
-            .iter()
-            .any(|(op_hash, _)| op_hash.eq(&operation_hash))
-        {
-            // ignore already scheduled
-            return;
-        }
-        if self.queued_mempool_operations.contains_key(&operation_hash) {
-            // ignore already scheduled
-            return;
-        }
+    pub fn mempool_operations_response_pending(&self, timeout: Duration) -> bool {
+        let mempool_operations_request_last = match self.mempool_operations_request_last {
+            Some(mempool_operations_request_last) => mempool_operations_request_last,
+            None => {
+                // no request, measn no pendings
+                return false;
+            }
+        };
 
-        self.missing_mempool_operations
-            .push((operation_hash, mempool_type));
+        match self.mempool_operations_response_last {
+            Some(mempool_operations_response_last) => {
+                // queued and we did receive last operation long time ago
+                !self.queued_mempool_operations.is_empty()
+                    && mempool_operations_response_last.elapsed() > timeout
+            }
+            None => {
+                // queued and we did not receive any operations yet, but we requested long time ago
+                !self.queued_mempool_operations.is_empty()
+                    && mempool_operations_request_last.elapsed() > timeout
+            }
+        }
+    }
+
+    /// all operations (known_valid + pending) should be added to pending and validated afterwards
+    /// enqueue mempool operations for retrieval
+    pub(crate) fn add_missing_mempool_operations_for_download(
+        &mut self,
+        received_mempool: &Mempool,
+    ) {
+        let PeerState {
+            missing_mempool_operations,
+            queued_mempool_operations,
+            ..
+        } = self;
+
+        let filter_non_scheduled_for_download = |requested_op: &OperationHash| -> bool {
+            if missing_mempool_operations
+                .iter()
+                .any(|op_hash| op_hash.eq(&requested_op))
+            {
+                false
+            } else if queued_mempool_operations.contains_key(&requested_op) {
+                false
+            } else {
+                true
+            }
+        };
+
+        // filter all non-scheduled yet
+        let mut not_scheduled: HashSet<&OperationHash> = received_mempool
+            .known_valid()
+            .iter()
+            .filter(|requested_op| filter_non_scheduled_for_download(requested_op))
+            .collect();
+        not_scheduled.extend(
+            received_mempool
+                .pending()
+                .iter()
+                .filter(|requested_op| filter_non_scheduled_for_download(requested_op)),
+        );
+
+        // add to the missing
+        for operation_hash in not_scheduled {
+            self.missing_mempool_operations.push(operation_hash.clone());
+        }
     }
 
     pub fn schedule_missing_operations_for_mempool(peers: &mut HashMap<ActorUri, PeerState>) {
@@ -181,7 +227,7 @@ impl PeerState {
                     .map(|(op_hash, _)| op_hash)
                     .collect();
 
-                peer.mempool_operations_request_last = Instant::now();
+                peer.mempool_operations_request_last = Some(Instant::now());
 
                 if limits::GET_OPERATIONS_MAX_LENGTH > 0 {
                     ops_to_get

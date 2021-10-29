@@ -48,7 +48,7 @@ pub struct InjectedBlockWithOperations {
 
 pub fn get_pending_operations(
     _chain_id: &ChainId,
-    current_mempool_state_storage: CurrentMempoolStateStorageRef,
+    current_mempool_state_storage: &CurrentMempoolStateStorageRef,
 ) -> Result<(MempoolOperations, Option<ProtocolHash>), RpcServiceError> {
     // get actual known state of mempool
     let current_mempool_state = current_mempool_state_storage.read()?;
