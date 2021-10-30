@@ -83,12 +83,9 @@ impl<S: Serialize> IpcSender<S> {
 
 impl<S> Drop for IpcSender<S> {
     fn drop(&mut self) {
-        match tokio::runtime::Handle::try_current() {
-            Ok(tokio_runtime) => {
-                let _ =
-                    tokio::task::block_in_place(|| tokio_runtime.block_on(self.shutdown()).ok());
-            }
-            Err(_) => (), // Nothing to do if runtime is not available
+        if let Ok(tokio_runtime) = tokio::runtime::Handle::try_current() {
+            // We only do this shutdown if the runtime is available, otherwise there is nothing to do.
+            let _ = tokio::task::block_in_place(|| tokio_runtime.block_on(self.shutdown()).ok());
         }
     }
 }

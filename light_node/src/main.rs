@@ -162,7 +162,6 @@ fn block_on_actors(
         persistent_storage.clone(),
         current_mempool_state_storage.clone(),
         Arc::clone(&tezos_protocol_api),
-        tokio_runtime.handle(),
         env.p2p.disable_mempool,
     ));
 
@@ -175,7 +174,6 @@ fn block_on_actors(
         actor_system.as_ref(),
         persistent_storage.clone(),
         Arc::clone(&tezos_protocol_api),
-        tokio_runtime.handle(),
         init_storage_data.clone(),
         env.tezos_network_config.clone(),
         log.clone(),
@@ -242,7 +240,6 @@ fn block_on_actors(
         mempool_prevalidator_factory.clone(),
         identity.clone(),
         initialize_chain_manager_result_callback,
-        tokio_runtime.handle(),
     )
     .expect("Failed to create chain manager");
 

@@ -114,7 +114,6 @@ pub struct Identity {
 
 #[derive(Debug, Clone)]
 pub struct Ffi {
-    // TODO: protocol runner configuration
     pub protocol_runner: PathBuf,
     pub zcash_param: ZcashParams,
 }

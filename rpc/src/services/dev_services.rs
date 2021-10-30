@@ -305,16 +305,7 @@ pub(crate) async fn get_blocks(
                 cycle_position,
             });
         }
-        // TODO: show warning?
-        /* else {
-            bail!(
-                "No additional data found for block_hash: {}",
-                block_hash.to_base58_check()
-            )
-        } */
     }
-    //.filter_map(Result::ok)
-    //.collect::<Vec<SlimBlockData>>();
     Ok(result)
 }
 

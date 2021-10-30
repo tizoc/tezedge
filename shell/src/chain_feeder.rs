@@ -161,12 +161,12 @@ impl ChainFeeder {
         sys: &impl ActorRefFactory,
         persistent_storage: PersistentStorage,
         tezos_protocol_api: Arc<ProtocolRunnerApi>,
-        tokio_runtime: &tokio::runtime::Handle,
         init_storage_data: StorageInitInfo,
         tezos_env: TezosEnvironmentConfiguration,
         log: Logger,
         initialize_context_result_callback: InitializeContextOneshotResultCallback,
     ) -> Result<(ChainFeederRef, ThreadWatcher), CreateError> {
+        let tokio_runtime = tezos_protocol_api.tokio_runtime.clone();
         // spawn inner thread
         let (block_applier_event_sender, block_applier_thread_watcher) =
             BlockApplierThreadSpawner::new(
@@ -179,7 +179,7 @@ impl ChainFeeder {
             .spawn_feeder_thread(
                 "chain-feedr-ctx".into(),
                 initialize_context_result_callback,
-                tokio_runtime,
+                &tokio_runtime,
             )
             .map_err(|e| {
                 warn!(log, "Failed to spawn chain feeder thread"; "reason" => format!("{}", e));

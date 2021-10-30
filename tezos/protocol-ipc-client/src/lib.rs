@@ -1,6 +1,8 @@
 // Copyright (c) SimpleStaking, Viable Systems and Tezedge Contributors
 // SPDX-License-Identifier: MIT
 
+//! This module implements a client that provides access to the protocol runners.
+
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
@@ -86,7 +88,9 @@ impl ProtocolRunnerConfiguration {
     }
 }
 
-// TODO: differentiate between writable and readonly?
+// TODO: differentiate between writable and readonly runners?
+
+/// Representation of a running protocol runner instance.
 pub struct ProtocolRunnerInstance {
     configuration: ProtocolRunnerConfiguration,
     socket_path: PathBuf,
@@ -443,11 +447,13 @@ impl IpcIO {
     }
 }
 
+/// Manages the execution of the protocol runners and access to their functionality.
 pub struct ProtocolRunnerApi {
     pub(crate) writable_instance: RwLock<ProtocolRunnerInstance>,
-    pub(crate) tokio_runtime: tokio::runtime::Handle,
+    pub tokio_runtime: tokio::runtime::Handle,
 }
 
+/// Guard value that issues a shutdown of the protocol runner API infrastructure once dropped.
 pub struct ProtocolRunnerApiShutdownGuard {
     api: Arc<ProtocolRunnerApi>,
 }
@@ -478,6 +484,7 @@ impl ProtocolRunnerApi {
         }
     }
 
+    /// Spawns protocol runners and returns once they start accepting connections.
     pub async fn start(&mut self, timeout: Option<Duration>) -> Result<(), ProtocolRunnerError> {
         let mut instance = self.writable_instance.write().await;
 
@@ -487,16 +494,19 @@ impl ProtocolRunnerApi {
         Ok(())
     }
 
+    /// Shuts down all protocol runners.
     pub async fn shutdown(&self) {
         self.writable_instance.write().await.shutdown();
     }
 
+    /// Returns a guard value that will issue a shutdown of the protocol runner API infrastructure once dropped.
     pub fn shutdown_on_drop(self: &Arc<Self>) -> ProtocolRunnerApiShutdownGuard {
         ProtocolRunnerApiShutdownGuard {
             api: Arc::clone(self),
         }
     }
 
+    /// Obtains a connection to a protocol runner instance with write access to the context.
     pub async fn writable_connection(&self) -> Result<ProtocolRunnerConnection, IpcError> {
         // TODO: pool connections
         self.writable_instance
@@ -506,9 +516,20 @@ impl ProtocolRunnerApi {
             .await
     }
 
+    /// Like [`Self::writable_connection`] but callable from non-async functions.
+    pub fn writable_connection_sync(&self) -> Result<ProtocolRunnerConnection, IpcError> {
+        tokio::task::block_in_place(|| self.tokio_runtime.block_on(self.writable_connection()))
+    }
+
+    /// Obtains a connection to a protocol runner instance with read access to the context.
     pub async fn readable_connection(&self) -> Result<ProtocolRunnerConnection, IpcError> {
         // TODO: reimplement once readonly instances have been added
         self.writable_connection().await
+    }
+
+    /// Like [`Self::readable_connection`] but callable from non-async functions.
+    pub fn readable_connection_sync(&self) -> Result<ProtocolRunnerConnection, IpcError> {
+        tokio::task::block_in_place(|| self.tokio_runtime.block_on(self.readable_connection()))
     }
 }
 
