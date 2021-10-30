@@ -567,17 +567,19 @@ macro_rules! handle_request {
 
 impl ProtocolRunnerConnection {
     const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
-    const DEFAULT_TIMEOUT_LONG: Duration = Duration::from_secs(300);
-    const APPLY_BLOCK_TIMEOUT: Duration = Duration::from_secs(60 * 60 * 2);
-    const INIT_PROTOCOL_CONTEXT_TIMEOUT: Duration = Duration::from_secs(60);
-    const BEGIN_APPLICATION_TIMEOUT: Duration = Duration::from_secs(120);
-    const BEGIN_CONSTRUCTION_TIMEOUT: Duration = Duration::from_secs(120);
-    const VALIDATE_OPERATION_TIMEOUT: Duration = Duration::from_secs(120);
-    const CALL_PROTOCOL_RPC_TIMEOUT: Duration = Duration::from_secs(30);
-    const CALL_PROTOCOL_HEAVY_RPC_TIMEOUT: Duration = Duration::from_secs(600);
-    const COMPUTE_PATH_TIMEOUT: Duration = Duration::from_secs(30);
-    const JSON_ENCODE_DATA_TIMEOUT: Duration = Duration::from_secs(30);
-    const ASSERT_ENCODING_FOR_PROTOCOL_DATA_TIMEOUT: Duration = Duration::from_secs(15);
+    const DEFAULT_TIMEOUT_LONG: Duration = Duration::from_secs(60 * 2);
+    const DEFAULT_TIMEOUT_VERY_LONG: Duration = Duration::from_secs(60 * 30);
+
+    const APPLY_BLOCK_TIMEOUT: Duration = Self::DEFAULT_TIMEOUT_VERY_LONG;
+    const INIT_PROTOCOL_CONTEXT_TIMEOUT: Duration = Self::DEFAULT_TIMEOUT_LONG;
+    const BEGIN_APPLICATION_TIMEOUT: Duration = Self::DEFAULT_TIMEOUT_LONG;
+    const BEGIN_CONSTRUCTION_TIMEOUT: Duration = Self::DEFAULT_TIMEOUT_LONG;
+    const VALIDATE_OPERATION_TIMEOUT: Duration = Self::DEFAULT_TIMEOUT_LONG;
+    const CALL_PROTOCOL_RPC_TIMEOUT: Duration = Self::DEFAULT_TIMEOUT_LONG;
+    const CALL_PROTOCOL_HEAVY_RPC_TIMEOUT: Duration = Self::DEFAULT_TIMEOUT_VERY_LONG;
+    const COMPUTE_PATH_TIMEOUT: Duration = Self::DEFAULT_TIMEOUT_LONG;
+    const JSON_ENCODE_DATA_TIMEOUT: Duration = Self::DEFAULT_TIMEOUT_LONG;
+    const ASSERT_ENCODING_FOR_PROTOCOL_DATA_TIMEOUT: Duration = Self::DEFAULT_TIMEOUT_LONG;
 
     /// Apply block
     pub async fn apply_block(
@@ -1012,7 +1014,7 @@ impl ProtocolRunnerConnection {
             ContextGetKeyValuesByPrefix(params),
             ContextGetKeyValuesByPrefixResult(result),
             ContextGetKeyValuesByPrefixError,
-            Some(Self::DEFAULT_TIMEOUT_LONG),
+            Some(Self::DEFAULT_TIMEOUT_VERY_LONG),
         )
     }
 
@@ -1033,7 +1035,7 @@ impl ProtocolRunnerConnection {
             ContextGetTreeByPrefix(params),
             ContextGetTreeByPrefixResult(result),
             ContextGetKeyValuesByPrefixError,
-            Some(Self::DEFAULT_TIMEOUT_LONG),
+            Some(Self::DEFAULT_TIMEOUT_VERY_LONG),
         )
     }
 }
