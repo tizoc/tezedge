@@ -1,23 +1,17 @@
 // Copyright (c) SimpleStaking, Viable Systems and Tezedge Contributors
 // SPDX-License-Identifier: MIT
 
-use std::cmp;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tezedge_actor_system::actors::*;
-
-use crate::mempool::CurrentMempoolStateStorageRef;
 use crypto::hash::{BlockHash, OperationHash};
 use networking::PeerId;
-use storage::mempool_storage::MempoolOperationType;
-use storage::{BlockHeaderWithHash, MempoolStorage};
+use storage::BlockHeaderWithHash;
 use tezos_messages::p2p::encoding::block_header::Level;
 use tezos_messages::p2p::encoding::limits;
-use tezos_messages::p2p::encoding::prelude::{GetOperationsMessage, Mempool, MetadataMessage};
+use tezos_messages::p2p::encoding::prelude::MetadataMessage;
 
-use crate::state::data_requester::tell_peer;
 use crate::state::synchronization_state::UpdateIsBootstrapped;
 use crate::state::StateError;
 
@@ -55,12 +49,9 @@ pub struct PeerState {
     /// Last time we received mempool operations from the peer
     pub(crate) mempool_operations_response_last: Option<Instant>,
 
-    /// Missing mempool operation hashes. Peer will be asked to provide operations for those hashes.
-    /// After peer is asked for operation, this hash will be moved to `queued_mempool_operations`.
-    pub(crate) missing_mempool_operations: Vec<OperationHash>,
     /// Queued mempool operations. This map holds an operation hash and
     /// a tuple of type of a mempool operation with its time to live.
-    pub(crate) queued_mempool_operations: HashMap<OperationHash, (MempoolOperationType, Instant)>,
+    pub(crate) queued_mempool_operations: HashSet<OperationHash>,
 
     /// Collected stats about p2p messages
     pub(crate) message_stats: MessageStats,
@@ -78,8 +69,7 @@ impl PeerState {
             is_bootstrapped: false,
             queues: Arc::new(DataQueues::new(limits)),
             missing_operations_for_blocks: HashMap::default(),
-            missing_mempool_operations: Vec::new(),
-            queued_mempool_operations: HashMap::default(),
+            queued_mempool_operations: HashSet::default(),
             current_head_level: None,
             current_head_update_last: Instant::now(),
             current_head_request_last: Instant::now(),
@@ -90,7 +80,7 @@ impl PeerState {
         }
     }
 
-    fn available_mempool_operations_queue_capacity(&self) -> usize {
+    pub fn available_mempool_operations_queue_capacity(&self) -> usize {
         let queued_count = self.queued_mempool_operations.len();
         if queued_count < MEMPOOL_OPERATIONS_BATCH_SIZE {
             MEMPOOL_OPERATIONS_BATCH_SIZE - queued_count
@@ -126,7 +116,6 @@ impl PeerState {
     }
 
     pub fn clear(&mut self) {
-        self.missing_mempool_operations.clear();
         // self.queued_block_headers.clear();
         // self.queued_block_operations.clear();
         self.queued_mempool_operations.clear();
@@ -154,94 +143,6 @@ impl PeerState {
                     && mempool_operations_request_last.elapsed() > timeout
             }
         }
-    }
-
-    /// all operations (known_valid + pending) should be added to pending and validated afterwards
-    /// enqueue mempool operations for retrieval
-    pub(crate) fn add_missing_mempool_operations_for_download(
-        &mut self,
-        received_mempool: &Mempool,
-    ) {
-        let PeerState {
-            missing_mempool_operations,
-            queued_mempool_operations,
-            ..
-        } = self;
-
-        let filter_non_scheduled_for_download = |requested_op: &OperationHash| -> bool {
-            if missing_mempool_operations
-                .iter()
-                .any(|op_hash| op_hash.eq(&requested_op))
-            {
-                false
-            } else if queued_mempool_operations.contains_key(&requested_op) {
-                false
-            } else {
-                true
-            }
-        };
-
-        // filter all non-scheduled yet
-        let mut not_scheduled: HashSet<&OperationHash> = received_mempool
-            .known_valid()
-            .iter()
-            .filter(|requested_op| filter_non_scheduled_for_download(requested_op))
-            .collect();
-        not_scheduled.extend(
-            received_mempool
-                .pending()
-                .iter()
-                .filter(|requested_op| filter_non_scheduled_for_download(requested_op)),
-        );
-
-        // add to the missing
-        for operation_hash in not_scheduled {
-            self.missing_mempool_operations.push(operation_hash.clone());
-        }
-    }
-
-    pub fn schedule_missing_operations_for_mempool(peers: &mut HashMap<ActorUri, PeerState>) {
-        peers
-            .values_mut()
-            .filter(|peer| !peer.missing_mempool_operations.is_empty())
-            .filter(|peer| peer.available_mempool_operations_queue_capacity() > 0)
-            .for_each(|peer| {
-                let num_opts_to_get = cmp::min(
-                    peer.missing_mempool_operations.len(),
-                    peer.available_mempool_operations_queue_capacity(),
-                );
-                let ops_to_enqueue = peer
-                    .missing_mempool_operations
-                    .drain(0..num_opts_to_get)
-                    .collect::<Vec<_>>();
-
-                ops_to_enqueue
-                    .iter()
-                    .cloned()
-                    .for_each(|(op_hash, op_type)| {
-                        peer.queued_mempool_operations.insert(op_hash, op_type);
-                    });
-
-                let ops_to_get: Vec<OperationHash> = ops_to_enqueue
-                    .into_iter()
-                    .map(|(op_hash, _)| op_hash)
-                    .collect();
-
-                peer.mempool_operations_request_last = Some(Instant::now());
-
-                if limits::GET_OPERATIONS_MAX_LENGTH > 0 {
-                    ops_to_get
-                        .chunks(limits::GET_OPERATIONS_MAX_LENGTH)
-                        .for_each(|ops_to_get| {
-                            tell_peer(
-                                GetOperationsMessage::new(ops_to_get.into()).into(),
-                                &peer.peer_id,
-                            );
-                        });
-                } else {
-                    tell_peer(GetOperationsMessage::new(ops_to_get).into(), &peer.peer_id);
-                }
-            });
     }
 }
 

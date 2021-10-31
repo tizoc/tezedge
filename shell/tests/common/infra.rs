@@ -22,6 +22,7 @@ use networking::p2p::network_channel::{NetworkChannel, NetworkChannelRef};
 use networking::ShellCompatibilityVersion;
 use shell::chain_feeder::{ChainFeeder, ChainFeederRef};
 use shell::chain_manager::{ChainManager, ChainManagerRef};
+use shell::mempool::mempool_download_state::MempoolOperationStateConfiguration;
 use shell::mempool::{
     init_mempool_state_storage, CurrentMempoolStateStorageRef, MempoolPrevalidatorFactory,
 };
@@ -246,6 +247,10 @@ impl NodeInfrastructure {
             current_mempool_state_storage.clone(),
             p2p_threshold.num_of_peers_for_bootstrap_threshold(),
             mempool_prevalidator_factory.clone(),
+            MempoolOperationStateConfiguration::new(
+                Duration::from_secs(60),
+                Duration::from_millis(50),
+            ),
             identity.clone(),
             initialize_chain_manager_result_callback,
         )

@@ -43,6 +43,9 @@ use tezos_messages::Head;
 use tezos_wrapper::TezosApiConnectionPool;
 
 use crate::chain_feeder::ChainFeederRef;
+use crate::mempool::mempool_download_state::{
+    MempoolDownloadedOperationResult, MempoolOperationState, MempoolOperationStateConfiguration,
+};
 use crate::mempool::mempool_prevalidator::{MempoolPrevalidatorBasicRef, MempoolPrevalidatorMsg};
 use crate::mempool::mempool_state::MempoolState;
 use crate::mempool::{CurrentMempoolStateStorageRef, MempoolPrevalidatorFactory};
@@ -63,6 +66,7 @@ use crate::state::StateError;
 use crate::subscription::*;
 use crate::validation;
 use shell_integration::notifications::NewCurrentHeadNotification;
+use storage::mempool_storage::MempoolOperationType;
 
 /// How often to ask all connected peers for current head
 const ASK_CURRENT_HEAD_INTERVAL: Duration = Duration::from_secs(90);
@@ -211,6 +215,8 @@ pub struct ChainManager {
     current_head_state: HeadState,
     /// Holds "best" known remote head
     remote_current_head_state: RemoteBestKnownCurrentHead,
+    /// State holder for managing mempool operations
+    mempool_operation_state: MempoolOperationState,
     /// Internal stats
     stats: Stats,
 
@@ -254,6 +260,7 @@ impl ChainManager {
         current_mempool_state: CurrentMempoolStateStorageRef,
         num_of_peers_for_bootstrap_threshold: usize,
         mempool_prevalidator_factory: Arc<MempoolPrevalidatorFactory>,
+        mempool_operation_state_configuration: MempoolOperationStateConfiguration,
         identity: Arc<Identity>,
         first_initialization_done_result_callback: OneshotResultCallback<()>,
     ) -> Result<(ChainManagerRef, ThreadWatcher), CreateError> {
@@ -282,6 +289,7 @@ impl ChainManager {
                 current_mempool_state,
                 num_of_peers_for_bootstrap_threshold,
                 mempool_prevalidator_factory,
+                mempool_operation_state_configuration,
                 Arc::new(Mutex::new(Some(first_initialization_done_result_callback))),
             )),
         )
@@ -294,19 +302,37 @@ impl ChainManager {
         "chain-manager"
     }
 
-    fn check_mempool_completeness(&mut self, _ctx: &Context<ChainManagerMsg>) {
-        let ChainManager { peers, .. } = self;
+    fn check_mempool_completeness(&mut self, ctx: &Context<ChainManagerMsg>) {
+        let ChainManager {
+            peers,
+            mempool_operation_state,
+            ..
+        } = self;
 
-        // check for missing mempool operations
-        PeerState::schedule_missing_operations_for_mempool(peers);
+        if let Some(download_timeout) = mempool_operation_state.process_downloading(peers) {
+            self.schedule_check_mempool_completeness(ctx, Some(download_timeout));
+        }
     }
 
-    fn schedule_check_mempool_completeness(&mut self, ctx: &Context<ChainManagerMsg>) {
+    fn schedule_check_mempool_completeness(
+        &mut self,
+        ctx: &Context<ChainManagerMsg>,
+        delay: Option<Duration>,
+    ) {
         // if not scheduled, schedule one
         if !self.is_already_scheduled_ping_for_mempool_downloading {
             self.is_already_scheduled_ping_for_mempool_downloading = true;
-            ctx.myself
-                .tell(CheckMissingMempoolOperationsToDownload, None);
+            if let Some(delay) = delay {
+                ctx.schedule_once(
+                    delay,
+                    ctx.myself(),
+                    None,
+                    CheckMissingMempoolOperationsToDownload,
+                );
+            } else {
+                ctx.myself
+                    .tell(CheckMissingMempoolOperationsToDownload, None);
+            }
         }
     }
 
@@ -327,6 +353,7 @@ impl ChainManager {
             operations_storage,
             stats,
             mempool_storage,
+            mempool_operation_state,
             current_head_state,
             current_mempool_state,
             remote_current_head_state,
@@ -351,16 +378,7 @@ impl ChainManager {
                 }
             }
             NetworkChannelMsg::PeerStalled(actor_uri) => {
-                // remove peer from inner state
-                if let Some(mut peer_state) = self.peers.remove(&actor_uri) {
-                    // clear innner state (not needed, it will be drop)
-                    peer_state.clear();
-                }
-                // tell bootstrapper to clean potential data
-                if let Some(peer_branch_bootstrapper) = self.chain_state.peer_branch_bootstrapper()
-                {
-                    peer_branch_bootstrapper.tell(CleanPeerData(actor_uri), None);
-                }
+                self.clear_peer_data(ctx, actor_uri);
             }
             NetworkChannelMsg::PeerMessageReceived(received) => {
                 match peers.get_mut(received.peer.uri()) {
@@ -590,12 +608,12 @@ impl ChainManager {
                                             if !mempool_prevalidator_factory.p2p_disable_mempool
                                                 && mempool_prevalidator.is_some()
                                             {
-                                                peer.add_missing_mempool_operations_for_download(
-                                                    message.current_mempool(),
-                                                    current_mempool_state,
-                                                    mempool_storage,
-                                                );
-                                                self.schedule_check_mempool_completeness(ctx);
+                                                mempool_operation_state
+                                                    .add_missing_mempool_operations_for_download(
+                                                        message.current_mempool(),
+                                                        &peer.peer_id,
+                                                    );
+                                                self.schedule_check_mempool_completeness(ctx, None);
                                             }
                                         }
                                         BlockAcceptanceResult::IgnoreBlock => {
@@ -689,10 +707,10 @@ impl ChainManager {
                                 let operation = message.operation();
                                 let operation_hash = operation.message_typed_hash()?;
 
-                                match peer.queued_mempool_operations.remove(&operation_hash) {
-                                    Some((operation_type, _)) => {
-                                        peer.mempool_operations_response_last =
-                                            Some(Instant::now());
+                                match mempool_operation_state
+                                    .register_operation_downloaded(&operation_hash, peer)
+                                {
+                                    MempoolDownloadedOperationResult::Accept => {
                                         // do prevalidation before add the operation to mempool
                                         let result = match validation::prevalidate_operation(
                                             chain_state.get_chain_id(),
@@ -727,6 +745,7 @@ impl ChainManager {
                                         }
 
                                         // store mempool operation
+                                        let operation_type = MempoolOperationType::Pending;
                                         mempool_storage
                                             .put(operation_type.clone(), message.clone())?;
 
@@ -738,7 +757,7 @@ impl ChainManager {
                                             if mempool_prevalidator.try_tell(
                                                 MempoolPrevalidatorMsg::MempoolOperationReceived(
                                                     MempoolOperationReceived {
-                                                        operation_hash,
+                                                        operation_hash: operation_hash.clone(),
                                                         operation_type,
                                                         result_callback: None,
                                                     },
@@ -746,12 +765,13 @@ impl ChainManager {
                                                 None,
                                             ).is_err() {
                                                 warn!(ctx.system.log(), "Reset mempool error, mempool_prevalidator does not support message `MempoolOperationReceived`!"; "caller" => "chain_manager");
+                                            } else {
+                                                mempool_operation_state.register_sent_to_mempool(&operation_hash);
                                             }
                                         }
-
-                                        self.schedule_check_mempool_completeness(ctx);
                                     }
-                                    None => {
+                                    MempoolDownloadedOperationResult::Ignore => (),
+                                    MempoolDownloadedOperationResult::Unexpected => {
                                         debug!(log, "Unexpected mempool operation received"; "operation_branch" => operation.branch().to_base58_check(), "operation_hash" => operation_hash.to_base58_check())
                                     }
                                 }
@@ -1101,7 +1121,7 @@ impl ChainManager {
 
             // advertise our current_head
             self.advertise_current_head_to_p2p(
-                self.chain_state.get_chain_id(),
+                self.chain_state.get_chain_id().as_ref().clone(),
                 block.header.clone(),
                 Mempool::default(),
                 false,
@@ -1148,8 +1168,8 @@ impl ChainManager {
     ///
     /// `ignore_msg_with_empty_mempool` - if true means: send CurrentHead, only if we have anything in mempool (just to peers with enabled mempool)
     fn advertise_current_head_to_p2p(
-        &self,
-        chain_id: &ChainId,
+        &mut self,
+        chain_id: ChainId,
         block_header: Arc<BlockHeader>,
         mempool: Mempool,
         ignore_msg_with_empty_mempool: bool,
@@ -1160,6 +1180,9 @@ impl ChainManager {
             bool,
             Arc<PeerMessageResponse>,
         ) = {
+            self.mempool_operation_state
+                .register_advertised_to_p2p(&mempool);
+
             let current_head_msg =
                 CurrentHeadMessage::new(chain_id.clone(), block_header.as_ref().clone(), {
                     // we must check, if we have allowed mempool
@@ -1180,12 +1203,8 @@ impl ChainManager {
             Arc<PeerMessageResponse>,
         ) = (
             true,
-            CurrentHeadMessage::new(
-                chain_id.clone(),
-                block_header.as_ref().clone(),
-                Mempool::default(),
-            )
-            .into(),
+            CurrentHeadMessage::new(chain_id, block_header.as_ref().clone(), Mempool::default())
+                .into(),
         );
 
         // send messsages
@@ -1396,7 +1415,7 @@ impl ChainManager {
                     }
                     HeadResult::HeadIncrement => {
                         self.advertise_current_head_to_p2p(
-                            &chain_id,
+                            chain_id.as_ref().clone(),
                             block.header.clone(),
                             Mempool::default(),
                             false,
@@ -1430,6 +1449,25 @@ impl ChainManager {
             }
         }
     }
+
+    fn clear_peer_data(&mut self, ctx: &Context<ChainManagerMsg>, actor_uri: Arc<ActorUri>) {
+        // remove peer from inner state
+        if let Some(mut peer_state) = self.peers.remove(&actor_uri) {
+            // clear innner state (not needed, it will be drop)
+            peer_state.clear();
+        }
+
+        // clear from mempool operation state
+        self.mempool_operation_state.clear_peer_data(&actor_uri);
+
+        // tell bootstrapper to clean potential data
+        if let Some(peer_branch_bootstrapper) = self.chain_state.peer_branch_bootstrapper() {
+            peer_branch_bootstrapper.tell(CleanPeerData(actor_uri), None);
+        }
+
+        // when everybody is notified, ping mempool to reschedule missing
+        self.schedule_check_mempool_completeness(ctx, None);
+    }
 }
 
 impl
@@ -1446,6 +1484,7 @@ impl
         CurrentMempoolStateStorageRef,
         usize,
         Arc<MempoolPrevalidatorFactory>,
+        MempoolOperationStateConfiguration,
         Arc<Mutex<Option<OneshotResultCallback<()>>>>,
     )> for ChainManager
 {
@@ -1463,6 +1502,7 @@ impl
             current_mempool_state,
             num_of_peers_for_bootstrap_threshold,
             mempool_prevalidator_factory,
+            mempool_operation_state_configuration,
             first_initialization_done_result_callback,
         ): (
             ChainFeederRef,
@@ -1477,6 +1517,7 @@ impl
             CurrentMempoolStateStorageRef,
             usize,
             Arc<MempoolPrevalidatorFactory>,
+            MempoolOperationStateConfiguration,
             Arc<Mutex<Option<OneshotResultCallback<()>>>>,
         ),
     ) -> Self {
@@ -1501,6 +1542,9 @@ impl
                 Arc::new(init_storage_data.chain_id),
             ),
             remote_current_head_state: RemoteBestKnownCurrentHead::new(),
+            mempool_operation_state: MempoolOperationState::new(
+                mempool_operation_state_configuration,
+            ),
             shutting_down: false,
             stats: Stats {
                 unseen_block_count: 0,
@@ -1642,12 +1686,12 @@ impl Receive<SystemEvent> for ChainManager {
 
     fn receive(
         &mut self,
-        _: &Context<Self::Msg>,
+        ctx: &Context<Self::Msg>,
         msg: SystemEvent,
         _sender: Option<BasicActorRef>,
     ) {
         if let SystemEvent::ActorTerminated(evt) = msg {
-            self.peers.remove(evt.actor.uri());
+            self.clear_peer_data(ctx, Arc::new(evt.actor.uri().clone()));
         }
     }
 }
@@ -1677,6 +1721,7 @@ impl Receive<LogStats> for ChainManager {
             "last_received_block_operations_count" => self.stats.get_and_clear_unseen_block_operations_count(),
             "last_block_secs" => self.stats.unseen_block_last.elapsed().as_secs(),
             "last_block_operations_secs" => self.stats.unseen_block_operations_last.elapsed().as_secs(),
+            "mempool_operation_state" => self.mempool_operation_state.display_stats(),
             "actor_received_messages_count" => self.stats.get_and_clear_actor_received_messages_count(),
             "peer_count" => self.peers.len());
         // TODO: TE-369 - peers stats
@@ -1796,7 +1841,7 @@ impl Receive<CheckMissingMempoolOperationsToDownload> for ChainManager {
     ) {
         if !self.shutting_down {
             self.is_already_scheduled_ping_for_mempool_downloading = false;
-            self.check_mempool_completeness(ctx)
+            self.check_mempool_completeness(ctx);
         }
     }
 }
@@ -1904,7 +1949,7 @@ impl Receive<AdvertiseToP2pNewMempool> for ChainManager {
         // get header and send it to p2p
         match self.block_storage.get(&mempool_head) {
             Ok(Some(header)) => {
-                self.advertise_current_head_to_p2p(&chain_id, header.header, mempool, true)
+                self.advertise_current_head_to_p2p(chain_id, header.header, mempool, true)
             }
             Ok(None) => warn!(
                 ctx.system.log(),

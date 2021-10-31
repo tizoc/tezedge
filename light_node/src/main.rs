@@ -297,7 +297,7 @@ fn block_on_actors(
             }
         }
         Err(e) => {
-            panic!("Context was not initialized within {:?} timeout, e.g. try increase [--initialize-context-timeout], reason: {}", env.storage.initialize_context_timeout, e)
+            panic!("Context was not initialized within {:?} timeout, e.g. try increase [--initialize-context-timeout-in-secs], reason: {}", env.storage.initialize_context_timeout, e)
         }
     };
     info!(log, "Context initialized (6/8)");
@@ -342,6 +342,7 @@ fn block_on_actors(
             .peer_threshold
             .num_of_peers_for_bootstrap_threshold(),
         mempool_prevalidator_factory.clone(),
+        env.mempool.mempool_download_state,
         identity.clone(),
         initialize_chain_manager_result_callback,
     )
@@ -350,7 +351,7 @@ fn block_on_actors(
     if let Err(e) = initialize_chain_manager_result_callback_receiver
         .recv_timeout(env.initialize_chain_manager_timeout)
     {
-        panic!("Chain manager was not initialized within {:?} timeout, e.g. try increase [--initialize-chain-manager-timeout] and check logs for errors, reason: {}", env.initialize_chain_manager_timeout, e)
+        panic!("Chain manager was not initialized within {:?} timeout, e.g. try increase [--initialize-chain-manager-timeout-in-secs] and check logs for errors, reason: {}", env.initialize_chain_manager_timeout, e)
     };
     info!(log, "Chain manager initialized (8/8)");
 
