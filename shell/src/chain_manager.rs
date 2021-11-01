@@ -303,14 +303,16 @@ impl ChainManager {
     }
 
     fn check_mempool_completeness(&mut self, ctx: &Context<ChainManagerMsg>) {
+        self.is_already_scheduled_ping_for_mempool_downloading = false;
+
         let ChainManager {
             peers,
             mempool_operation_state,
             ..
         } = self;
 
-        if let Some(download_timeout) = mempool_operation_state.process_downloading(peers) {
-            self.schedule_check_mempool_completeness(ctx, Some(download_timeout));
+        if let Some(next_download_check) = mempool_operation_state.process_downloading(peers) {
+            self.schedule_check_mempool_completeness(ctx, Some(next_download_check));
         }
     }
 
@@ -608,12 +610,16 @@ impl ChainManager {
                                             if !mempool_prevalidator_factory.p2p_disable_mempool
                                                 && mempool_prevalidator.is_some()
                                             {
-                                                mempool_operation_state
+                                                if let Some(_) = mempool_operation_state
                                                     .add_missing_mempool_operations_for_download(
                                                         message.current_mempool(),
                                                         &peer.peer_id,
+                                                    )
+                                                {
+                                                    self.schedule_check_mempool_completeness(
+                                                        ctx, None,
                                                     );
-                                                self.schedule_check_mempool_completeness(ctx, None);
+                                                }
                                             }
                                         }
                                         BlockAcceptanceResult::IgnoreBlock => {
@@ -1691,7 +1697,9 @@ impl Receive<SystemEvent> for ChainManager {
         _sender: Option<BasicActorRef>,
     ) {
         if let SystemEvent::ActorTerminated(evt) = msg {
-            self.clear_peer_data(ctx, Arc::new(evt.actor.uri().clone()));
+            if !self.shutting_down {
+                self.clear_peer_data(ctx, Arc::new(evt.actor.uri().clone()));
+            }
         }
     }
 }
@@ -1760,6 +1768,7 @@ impl Receive<LogStats> for ChainManager {
                         _ =>  "-failed-to-collect-".to_string()
                     }
                 },
+                "mempool_queued_mempool_operations" => format!("{}|{}", peer.queued_mempool_operations.len(), peer.queued_mempool_operations.iter().map(|operation_hash| operation_hash.to_base58_check()).collect::<Vec<_>>().join(", ")),
                 "mempool_operations_request_secs" => peer.mempool_operations_request_last.map(|mempool_operations_request_last| mempool_operations_request_last.elapsed().as_secs()),
                 "mempool_operations_response_secs" => peer.mempool_operations_response_last.map(|mempool_operations_response_last| mempool_operations_response_last.elapsed().as_secs()),
                 "current_head_level" => peer.current_head_level,
@@ -1840,7 +1849,6 @@ impl Receive<CheckMissingMempoolOperationsToDownload> for ChainManager {
         _sender: Sender,
     ) {
         if !self.shutting_down {
-            self.is_already_scheduled_ping_for_mempool_downloading = false;
             self.check_mempool_completeness(ctx);
         }
     }

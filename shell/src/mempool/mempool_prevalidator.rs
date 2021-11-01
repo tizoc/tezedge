@@ -297,7 +297,7 @@ fn process_prevalidation(
         block_storage,
         chain_meta_storage,
         mempool_storage,
-        &current_mempool_state_storage,
+        current_mempool_state_storage,
         api,
         chain_id,
         log,

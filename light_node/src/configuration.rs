@@ -191,6 +191,11 @@ impl slog::Value for Environment {
         serializer.emit_arguments("ffi", &format_args!("{:?}", self.ffi))?;
         serializer.emit_arguments("replay", &format_args!("{:?}", self.replay))?;
         serializer.emit_arguments(
+            "initialize_chain_manager_timeout",
+            &format_args!("{:?}", self.initialize_chain_manager_timeout),
+        )?;
+        serializer.emit_arguments("mempool", &format_args!("{:?}", self.mempool))?;
+        serializer.emit_arguments(
             "enable_testchain",
             &format_args!("{:?}", self.enable_testchain),
         )?;

@@ -116,51 +116,66 @@ impl MempoolOperationState {
         )
     }
 
+    /// Returns Option::Some(download_timeout), which means, that we scheduled something and want to check in [download_timeout] if that succecced or needs to reschedule
     pub fn add_missing_mempool_operations_for_download(
         &mut self,
         received_mempool: &Mempool,
         peer: &Arc<PeerId>,
-    ) {
-        let mut add_to_missing_or_requested = |received_operation_hash: &OperationHash| match self
-            .operations
-            .get_mut(received_operation_hash)
-        {
-            Some(status) => match status {
-                MempoolOperationStatus::Missing(_, ref mut peers) => {
-                    if !peers.contains(peer) {
-                        let _ = peers.insert(peer.clone());
+    ) -> Option<Duration> {
+        if received_mempool.is_empty() {
+            return None;
+        }
+        let mut add_to_missing_or_requested =
+            |received_operation_hash: &OperationHash, missing_anything: &mut bool| match self
+                .operations
+                .get_mut(received_operation_hash)
+            {
+                Some(status) => match status {
+                    MempoolOperationStatus::Missing(_, ref mut peers) => {
+                        if !peers.contains(peer) {
+                            let _ = peers.insert(peer.clone());
+                        }
+                        *missing_anything = true;
                     }
-                }
-                MempoolOperationStatus::Requested(_, ref mut peers) => {
-                    if !peers.contains_key(peer) {
-                        let _ = peers.insert(peer.clone(), None);
+                    MempoolOperationStatus::Requested(_, ref mut peers) => {
+                        if !peers.contains_key(peer) {
+                            let _ = peers.insert(peer.clone(), None);
+                        }
+                        *missing_anything = true;
                     }
+                    _ => (),
+                },
+                None => {
+                    let _ = self.operations.insert(
+                        received_operation_hash.clone(),
+                        MempoolOperationStatus::Missing(
+                            Instant::now(),
+                            HashSet::from_iter(vec![peer.clone()]),
+                        ),
+                    );
+                    *missing_anything = true;
+                    ()
                 }
-                _ => (),
-            },
-            None => {
-                let _ = self.operations.insert(
-                    received_operation_hash.clone(),
-                    MempoolOperationStatus::Missing(
-                        Instant::now(),
-                        HashSet::from_iter(vec![peer.clone()]),
-                    ),
-                );
-                ()
-            }
-        };
-        received_mempool
-            .known_valid()
-            .iter()
-            .for_each(|received_operation_hash| {
-                add_to_missing_or_requested(received_operation_hash)
-            });
-        received_mempool
-            .pending()
-            .iter()
-            .for_each(|received_operation_hash| {
-                add_to_missing_or_requested(received_operation_hash)
-            });
+            };
+
+        let mut missing_anything = false;
+
+        let Mempool {
+            known_valid,
+            pending,
+        } = received_mempool;
+        known_valid.iter().for_each(|received_operation_hash| {
+            add_to_missing_or_requested(received_operation_hash, &mut missing_anything)
+        });
+        pending.iter().for_each(|received_operation_hash| {
+            add_to_missing_or_requested(received_operation_hash, &mut missing_anything)
+        });
+
+        if missing_anything {
+            Some(self.cfg.download_timeout)
+        } else {
+            None
+        }
     }
 
     /// Returns Option::Some(download_timeout), which means, that we scheduled something and want to check in [download_timeout] if that succecced or needs to reschedule
@@ -435,18 +450,39 @@ impl MempoolOperationState {
     }
 
     pub(crate) fn register_advertised_to_p2p(&mut self, mempool: &Mempool) {
-        mempool.known_valid().iter().for_each(|operation_hash| {
+        if mempool.is_empty() {
+            return;
+        }
+
+        let Mempool {
+            known_valid,
+            pending,
+        } = mempool;
+
+        known_valid.iter().for_each(|operation_hash| {
             if let Some(operation_state) = self.operations.get_mut(operation_hash) {
                 if !operation_state.is_advertised() {
                     *operation_state = MempoolOperationStatus::AdvertisedToP2p(Instant::now());
                 }
+            } else {
+                // this could happen, when we inject operation from rpc
+                let _ = self.operations.insert(
+                    operation_hash.clone(),
+                    MempoolOperationStatus::AdvertisedToP2p(Instant::now()),
+                );
             }
         });
-        mempool.pending().iter().for_each(|operation_hash| {
+        pending.iter().for_each(|operation_hash| {
             if let Some(operation_state) = self.operations.get_mut(operation_hash) {
                 if !operation_state.is_advertised() {
                     *operation_state = MempoolOperationStatus::AdvertisedToP2p(Instant::now());
                 }
+            } else {
+                // this could happen, when we inject operation from rpc
+                let _ = self.operations.insert(
+                    operation_hash.clone(),
+                    MempoolOperationStatus::AdvertisedToP2p(Instant::now()),
+                );
             }
         });
     }

@@ -240,13 +240,13 @@ fn block_on_actors(
             .log(log.clone())
             .cfg({
                 let mut cfg = tezedge_actor_system::load_config();
-                // websocket uses [`ctx.schedule`] with cca 1.5s delay,
-                // and without websocket, the lowest scheduled delay is about 15s
-                // so default 50ms for actor system schedule thread is too low
-                cfg.scheduler.frequency_millis = if env.rpc.websocket_cfg.is_some() {
+                cfg.scheduler.frequency_millis = if env.p2p.disable_mempool {
+                    // without mempool, the lowest scheduled delay is about 1-1.5s
+                    // so default 50ms for actor system schedule thread is too low
                     500
                 } else {
-                    5000
+                    // leave default 50ms
+                    cfg.scheduler.frequency_millis
                 };
                 cfg
             })
