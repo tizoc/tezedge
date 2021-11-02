@@ -143,7 +143,7 @@ pub struct Mempool {
 }
 
 impl Mempool {
-    const DEFAULT_DOWNLOADED_OPERATION_MAX_TTL_IN_SECONDS: u64 = 2 * 60;
+    const DEFAULT_DOWNLOADED_OPERATION_MAX_TTL_IN_SECONDS: u64 = 90;
     const DEFAULT_DOWNLOAD_OPERATION_TIMEOUT_IN_MILLIS: u64 = 50;
 }
 
@@ -973,9 +973,11 @@ impl Environment {
                     .expect("Provided value cannot be converted to number"),
             );
 
-            let mut options = fs_extra::dir::CopyOptions::default();
-            options.content_only = true;
-            options.overwrite = true;
+            let options = fs_extra::dir::CopyOptions {
+                content_only: true,
+                overwrite: true,
+                ..Default::default()
+            };
 
             fs_extra::dir::copy(tezos_data_dir.as_path(), target_path.as_path(), &options).unwrap();
 

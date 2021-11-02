@@ -11,8 +11,9 @@ use tezedge_actor_system::actor::{ActorReference, ActorUri};
 
 use crypto::hash::OperationHash;
 use networking::PeerId;
+use shell_integration::MempoolOperationRef;
 use tezos_messages::p2p::encoding::limits;
-use tezos_messages::p2p::encoding::prelude::{GetOperationsMessage, Mempool};
+use tezos_messages::p2p::encoding::prelude::{GetOperationsMessage, Mempool, OperationMessage};
 
 use crate::state::data_requester::tell_peer;
 use crate::state::peer_state::PeerState;
@@ -30,9 +31,9 @@ pub enum MempoolOperationStatus {
     /// .0 - contains time of change state datetime
     Downloaded(Instant),
     /// .0 - contains time of change state datetime
-    SentToMempool(Instant),
+    SentToMempool(Instant, MempoolOperationRef),
     /// .0 - contains time of change state datetime
-    AdvertisedToP2p(Instant),
+    AdvertisedToP2p(Instant, MempoolOperationRef),
 }
 
 impl MempoolOperationStatus {
@@ -41,8 +42,8 @@ impl MempoolOperationStatus {
             MempoolOperationStatus::Missing(changed, _)
             | MempoolOperationStatus::Requested(changed, _)
             | MempoolOperationStatus::Downloaded(changed)
-            | MempoolOperationStatus::SentToMempool(changed)
-            | MempoolOperationStatus::AdvertisedToP2p(changed) => changed.elapsed().gt(max_ttl),
+            | MempoolOperationStatus::SentToMempool(changed, _)
+            | MempoolOperationStatus::AdvertisedToP2p(changed, _) => changed.elapsed().gt(max_ttl),
         }
     }
 
@@ -58,7 +59,7 @@ impl MempoolOperationStatus {
 }
 
 pub enum MempoolDownloadedOperationResult {
-    Accept,
+    Accept(MempoolOperationRef),
     Ignore,
     Unexpected,
 }
@@ -116,6 +117,21 @@ impl MempoolOperationState {
         )
     }
 
+    pub fn find_mempool_operation(
+        &self,
+        operation_hash: &OperationHash,
+    ) -> Option<&MempoolOperationRef> {
+        match self.operations.get(operation_hash) {
+            Some(MempoolOperationStatus::SentToMempool(_, mempool_operation)) => {
+                Some(mempool_operation)
+            }
+            Some(MempoolOperationStatus::AdvertisedToP2p(_, mempool_operation)) => {
+                Some(mempool_operation)
+            }
+            _ => None,
+        }
+    }
+
     /// Returns Option::Some(download_timeout), which means, that we scheduled something and want to check in [download_timeout] if that succecced or needs to reschedule
     pub fn add_missing_mempool_operations_for_download(
         &mut self,
@@ -125,6 +141,7 @@ impl MempoolOperationState {
         if received_mempool.is_empty() {
             return None;
         }
+
         let mut add_to_missing_or_requested =
             |received_operation_hash: &OperationHash, missing_anything: &mut bool| match self
                 .operations
@@ -225,7 +242,7 @@ impl MempoolOperationState {
                             // add to requests
                             prepare_request_to_send(
                                 operation_hash.clone(),
-                                &peer,
+                                peer,
                                 peer_state,
                                 requests,
                             );
@@ -405,6 +422,7 @@ impl MempoolOperationState {
     pub fn register_operation_downloaded(
         &mut self,
         operation_hash: &OperationHash,
+        operation: &OperationMessage,
         peer: &mut PeerState,
     ) -> MempoolDownloadedOperationResult {
         if let Some(operation_state) = self.operations.get_mut(operation_hash) {
@@ -417,19 +435,19 @@ impl MempoolOperationState {
                     if peer.queued_mempool_operations.remove(operation_hash) {
                         peer.mempool_operations_response_last = Some(Instant::now());
                         *operation_state = MempoolOperationStatus::Downloaded(Instant::now());
-                        MempoolDownloadedOperationResult::Accept
+                        MempoolDownloadedOperationResult::Accept(Arc::new(operation.clone()))
                     } else {
                         MempoolDownloadedOperationResult::Unexpected
                     }
                 }
-                MempoolOperationStatus::Downloaded(_) => {
+                MempoolOperationStatus::Downloaded(..) => {
                     // already downloaded and (probably) processed before
                     MempoolDownloadedOperationResult::Ignore
                 }
-                MempoolOperationStatus::SentToMempool(_) => {
+                MempoolOperationStatus::SentToMempool(..) => {
                     MempoolDownloadedOperationResult::Ignore
                 }
-                MempoolOperationStatus::AdvertisedToP2p(_) => {
+                MempoolOperationStatus::AdvertisedToP2p(..) => {
                     MempoolDownloadedOperationResult::Ignore
                 }
             }
@@ -443,48 +461,69 @@ impl MempoolOperationState {
         }
     }
 
-    pub(crate) fn register_sent_to_mempool(&mut self, operation_hash: &OperationHash) {
+    pub(crate) fn register_sent_to_mempool(
+        &mut self,
+        operation_hash: &OperationHash,
+        downloaded_operation: MempoolOperationRef,
+    ) {
         if let Some(operation_state) = self.operations.get_mut(operation_hash) {
-            *operation_state = MempoolOperationStatus::SentToMempool(Instant::now());
+            *operation_state =
+                MempoolOperationStatus::SentToMempool(Instant::now(), downloaded_operation);
         }
     }
 
-    pub(crate) fn register_advertised_to_p2p(&mut self, mempool: &Mempool) {
-        if mempool.is_empty() {
-            return;
+    pub(crate) fn register_advertised_to_p2p(
+        &mut self,
+        mut mempool: Mempool,
+        mempool_operations: HashMap<OperationHash, MempoolOperationRef>,
+    ) -> Mempool {
+        if mempool.is_empty() || mempool_operations.is_empty() {
+            return Mempool::default();
         }
+
+        let mut mark_advertised = |operation_hash: &OperationHash| {
+            if let Some(operation_state) = self.operations.get_mut(operation_hash) {
+                if !operation_state.is_advertised() {
+                    if let Some(mempool_operation) = mempool_operations.get(operation_hash) {
+                        *operation_state = MempoolOperationStatus::AdvertisedToP2p(
+                            Instant::now(),
+                            mempool_operation.clone(),
+                        );
+                        true
+                    } else {
+                        // do not propagate OperationHash without stored operation
+                        false
+                    }
+                } else {
+                    true
+                }
+            } else {
+                // this could happen, when we inject operation from rpc
+                if let Some(mempool_operation) = mempool_operations.get(operation_hash) {
+                    let _ = self.operations.insert(
+                        operation_hash.clone(),
+                        MempoolOperationStatus::AdvertisedToP2p(
+                            Instant::now(),
+                            mempool_operation.clone(),
+                        ),
+                    );
+                    true
+                } else {
+                    // do not propagate OperationHash without stored operation
+                    false
+                }
+            }
+        };
 
         let Mempool {
             known_valid,
             pending,
-        } = mempool;
+        } = &mut mempool;
 
-        known_valid.iter().for_each(|operation_hash| {
-            if let Some(operation_state) = self.operations.get_mut(operation_hash) {
-                if !operation_state.is_advertised() {
-                    *operation_state = MempoolOperationStatus::AdvertisedToP2p(Instant::now());
-                }
-            } else {
-                // this could happen, when we inject operation from rpc
-                let _ = self.operations.insert(
-                    operation_hash.clone(),
-                    MempoolOperationStatus::AdvertisedToP2p(Instant::now()),
-                );
-            }
-        });
-        pending.iter().for_each(|operation_hash| {
-            if let Some(operation_state) = self.operations.get_mut(operation_hash) {
-                if !operation_state.is_advertised() {
-                    *operation_state = MempoolOperationStatus::AdvertisedToP2p(Instant::now());
-                }
-            } else {
-                // this could happen, when we inject operation from rpc
-                let _ = self.operations.insert(
-                    operation_hash.clone(),
-                    MempoolOperationStatus::AdvertisedToP2p(Instant::now()),
-                );
-            }
-        });
+        known_valid.retain(|operation_hash| mark_advertised(operation_hash));
+        pending.retain(|operation_hash| mark_advertised(operation_hash));
+
+        mempool
     }
 
     pub fn clear_peer_data(&mut self, peer_to_clear: &ActorUri) {

@@ -236,6 +236,8 @@ pub fn prevalidate_operation(
         });
     }
 
+    // TODO: check max_ttl for too old branch
+
     // get actual known state of mempool, we need the same head as used actualy be mempool
     let mempool_state =
         current_mempool_state
