@@ -5,12 +5,14 @@ use std::{
     convert::TryInto,
     fs::OpenOptions,
     io::{self, Seek, SeekFrom, Write},
+    ops::Range,
     os::unix::prelude::OpenOptionsExt,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use serde::{Deserialize, Serialize};
+use static_assertions::const_assert;
 use thiserror::Error;
 
 use crate::serialize::persistent::AbsoluteOffset;
@@ -109,6 +111,8 @@ impl FileType {
 pub struct File<const T: TaggedFile> {
     file: std::fs::File,
     offset: u64,
+    checksum_computed_until: u64,
+    crc32: crc32fast::Hasher,
 }
 
 /// Absolute offset in the file
@@ -173,7 +177,13 @@ impl<const T: TaggedFile> File<T> {
 
         // We use seek, in cases metadatas were not synchronized
         let offset = file.seek(SeekFrom::End(0))?;
-        let mut file = Self { file, offset };
+        let crc32 = crc32fast::Hasher::new();
+        let mut file = Self {
+            file,
+            offset,
+            crc32,
+            checksum_computed_until: 0,
+        };
 
         if offset == 0 {
             file.write_header()?;
@@ -225,6 +235,47 @@ impl<const T: TaggedFile> File<T> {
         Ok(())
     }
 
+    pub fn update_checksum_until(&mut self, end: u64) {
+        let mut buffer = vec![0; 64 * 1024];
+        // let mut buffer: Vec<u8> = Vec::with_capacity();
+        let mut offset = self.checksum_computed_until;
+
+        while offset < end {
+            let length_to_read = if offset + buffer.len() as u64 > end {
+                (end - offset) as usize
+            } else {
+                buffer.len()
+            };
+
+            let buffer = &mut buffer[..length_to_read];
+
+            self.read_exact_at(buffer, (offset as u64).into()).unwrap();
+            offset += buffer.len() as u64;
+            self.crc32.update(buffer);
+
+            assert!(buffer.len() > 0);
+        }
+
+        self.checksum_computed_until = end;
+    }
+
+    pub fn truncate_with_checksum(
+        &mut self,
+        new_size: u64,
+        checksum: u32,
+    ) -> Result<(), io::Error> {
+        if new_size != self.offset {
+            assert!(new_size < self.offset);
+
+            self.file.set_len(new_size)?;
+            self.offset = new_size;
+            self.checksum_computed_until = new_size;
+            self.crc32 = crc32fast::Hasher::new_with_initial(checksum);
+        }
+
+        Ok(())
+    }
+
     pub fn truncate(&mut self, new_size: u64) -> Result<(), io::Error> {
         if new_size != self.offset {
             assert!(new_size < self.offset);
@@ -257,8 +308,13 @@ impl<const T: TaggedFile> File<T> {
     pub fn append(&mut self, bytes: impl AsRef<[u8]>) -> Result<(), io::Error> {
         let bytes = bytes.as_ref();
 
+        self.crc32.update(bytes);
         self.offset += bytes.len() as u64;
         self.file.write_all(bytes)
+    }
+
+    pub fn checksum(&self) -> u32 {
+        self.crc32.clone().finalize()
     }
 
     pub fn write_all_at(
@@ -267,6 +323,9 @@ impl<const T: TaggedFile> File<T> {
         offset: AbsoluteOffset,
     ) -> Result<(), io::Error> {
         use std::os::unix::prelude::FileExt;
+
+        // This method must be used with TAG_SIZES only, other files are append only
+        assert_eq!(T, TAG_SIZES);
 
         let bytes = bytes.as_ref();
         self.file.write_all_at(bytes, offset.as_u64())
