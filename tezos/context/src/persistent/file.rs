@@ -5,14 +5,12 @@ use std::{
     convert::TryInto,
     fs::OpenOptions,
     io::{self, Seek, SeekFrom, Write},
-    ops::Range,
     os::unix::prelude::OpenOptionsExt,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use serde::{Deserialize, Serialize};
-use static_assertions::const_assert;
 use thiserror::Error;
 
 use crate::serialize::persistent::AbsoluteOffset;
@@ -111,6 +109,8 @@ impl FileType {
 pub struct File<const T: TaggedFile> {
     file: std::fs::File,
     offset: u64,
+    /// Value used during reloading only. This is to keep track of until
+    /// where the checksum was computed
     checksum_computed_until: u64,
     crc32: crc32fast::Hasher,
 }
@@ -237,7 +237,6 @@ impl<const T: TaggedFile> File<T> {
 
     pub fn update_checksum_until(&mut self, end: u64) {
         let mut buffer = vec![0; 64 * 1024];
-        // let mut buffer: Vec<u8> = Vec::with_capacity();
         let mut offset = self.checksum_computed_until;
 
         while offset < end {

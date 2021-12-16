@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 use std::sync::{Arc, RwLock};
+use std::thread::JoinHandle;
 
 use ipc::IpcError;
 use ocaml_interop::BoxRoot;
@@ -53,6 +54,44 @@ pub enum IndexInitializationError {
     InvalidSizesOfFiles,
 }
 
+fn spawn_reload_database(
+    repository: Arc<RwLock<ContextKeyValueStore>>,
+) -> std::io::Result<JoinHandle<()>> {
+    let thread = std::thread::Builder::new().name("db-reload".to_string());
+    let (sender, recv) = std::sync::mpsc::channel();
+
+    let result = thread.spawn(move || {
+        println!("Reloading context");
+        let mut repository = match repository.write() {
+            Ok(repository) => repository,
+            Err(e) => {
+                eprintln!("Failed to lock repository for reloading: {:?}", e);
+                return;
+            }
+        };
+
+        // Notify the main thread that the repository was locked
+        if let Err(e) = sender.send(()) {
+            eprintln!("Failed to notify main thread that repo is locked: {:?}", e);
+        }
+
+        if let Err(e) = repository.reload_database() {
+            eprintln!("Failed to reload repository: {:?}", e);
+        }
+        println!("Context reloaded");
+    });
+
+    // Wait for the spawned thread to lock the repository.
+    // This is necessary to make sure that `TezedgeIndex` doesn't start
+    // processing queries without having the repository synchronized
+    // with data on disk
+    if let Err(e) = recv.recv() {
+        eprintln!("Failed to get notified that repo is locked: {:?}", e);
+    }
+
+    result
+}
+
 pub fn initialize_tezedge_index(
     configuration: &TezosContextTezEdgeStorageConfiguration,
     patch_context: Option<BoxRoot<PatchContextFunction>>,
@@ -70,23 +109,13 @@ pub fn initialize_tezedge_index(
         }
     };
 
-    // When the context is reloaded/restarted, the existings strings (found the the db file)
-    // are in the repository.
-    // We want `TezedgeIndex` to have its string interner updated with the one
-    // from the repository.
-    // This assumes that `initialize_tezedge_index` is called only once.
-    let string_interner = repository
-        .write()
-        .map_err(|e| IndexInitializationError::LockError {
-            reason: format!("{:?}", e),
-        })?
-        .take_strings_on_reload();
+    // We reload the database in another thread, to avoid blocking on
+    // `initialize_tezedge_index`: Reloading can take lots of time
+    if let Err(e) = spawn_reload_database(Arc::clone(&repository)) {
+        eprintln!("Failed to spawn thread to reload database: {:?}", e);
+    }
 
-    Ok(TezedgeIndex::new(
-        repository,
-        patch_context,
-        string_interner,
-    ))
+    Ok(TezedgeIndex::new(repository, patch_context))
 }
 
 pub fn initialize_tezedge_context(

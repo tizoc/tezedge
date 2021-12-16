@@ -51,7 +51,6 @@ const SIZES_NUMBER_OF_LINES: usize = 10;
 const SIZES_HASH_BYTES_LENGTH: usize = 32;
 /// Include the commit counter + the size of all files
 const SIZES_REST_BYTES_LENGTH: usize = 92;
-// const SIZES_REST_BYTES_LENGTH: usize = 64;
 const SIZES_BYTES_PER_LINE: usize = SIZES_HASH_BYTES_LENGTH + SIZES_REST_BYTES_LENGTH;
 
 pub struct Persistent {
@@ -223,31 +222,15 @@ impl Persistent {
         let lock_file = Lock::try_lock(&base_path)?;
 
         let sizes_file = File::<{ TAG_SIZES }>::try_new(&base_path)?;
-        let list_sizes = FileSizes::make_list_from_file(&sizes_file);
+        let data_file = File::<{ TAG_DATA }>::try_new(&base_path)?;
+        let shape_file = File::<{ TAG_SHAPE }>::try_new(&base_path)?;
+        let shape_index_file = File::<{ TAG_SHAPE_INDEX }>::try_new(&base_path)?;
+        let commit_index_file = File::<{ TAG_COMMIT_INDEX }>::try_new(&base_path)?;
+        let strings_file = File::<{ TAG_STRINGS }>::try_new(&base_path)?;
+        let big_strings_file = File::<{ TAG_BIG_STRINGS }>::try_new(&base_path)?;
+        let hashes_file = File::<{ TAG_HASHES }>::try_new(&base_path)?;
 
-        let mut data_file = File::<{ TAG_DATA }>::try_new(&base_path)?;
-        let mut shape_file = File::<{ TAG_SHAPE }>::try_new(&base_path)?;
-        let mut shape_index_file = File::<{ TAG_SHAPE_INDEX }>::try_new(&base_path)?;
-        let mut commit_index_file = File::<{ TAG_COMMIT_INDEX }>::try_new(&base_path)?;
-        let mut strings_file = File::<{ TAG_STRINGS }>::try_new(&base_path)?;
-        let mut big_strings_file = File::<{ TAG_BIG_STRINGS }>::try_new(&base_path)?;
-        let mut hashes_file = File::<{ TAG_HASHES }>::try_new(&base_path)?;
-
-        let commit_counter = Self::truncate_files_with_correct_sizes(
-            list_sizes.as_ref().map(|s| s.as_ref()),
-            &mut data_file,
-            &mut shape_file,
-            &mut shape_index_file,
-            &mut commit_index_file,
-            &mut strings_file,
-            &mut big_strings_file,
-            &mut hashes_file,
-        )?;
-
-        let shapes = DirectoryShapes::deserialize(&mut shape_file, &mut shape_index_file)?;
-        let string_interner =
-            StringInterner::deserialize(&mut strings_file, &mut big_strings_file)?;
-        let (hashes, context_hashes) = deserialize_hashes(hashes_file, &commit_index_file)?;
+        let hashes = Hashes::try_new(hashes_file);
 
         Ok(Self {
             data_file,
@@ -257,11 +240,11 @@ impl Persistent {
             strings_file,
             hashes,
             big_strings_file,
-            shapes,
-            string_interner,
-            context_hashes,
+            shapes: Default::default(),
+            string_interner: Default::default(),
+            context_hashes: Default::default(),
             lock_file,
-            commit_counter,
+            commit_counter: Default::default(),
             sizes_file,
         })
     }
@@ -293,61 +276,17 @@ impl Persistent {
                 || hashes_file.offset().as_u64() < sizes.hashes_size
             {
                 // The actual file is smaller than what is in our `sizes.db` file
-                // Go to the previous commit
+                // Ignore following sizes as they contains bigger sizes
                 break;
             }
 
-            println!("Computing checksums");
             data_file.update_checksum_until(sizes.data_size);
-            println!("checksums computed data");
             shape_file.update_checksum_until(sizes.shape_size);
-            println!("checksums computed shape");
             shape_index_file.update_checksum_until(sizes.shape_index_size);
-            println!("checksums computed shape index");
             commit_index_file.update_checksum_until(sizes.commit_index_size);
-            println!("checksums computed commit index");
             strings_file.update_checksum_until(sizes.strings_size);
-            println!("checksums computed strings");
             big_strings_file.update_checksum_until(sizes.big_strings_size);
-            println!("checksums computed big strings");
             hashes_file.update_checksum_until(sizes.hashes_size);
-            println!("checksums computed");
-
-            println!(
-                "DATA COMPUTED={:?} FROM_FILE={:?}",
-                data_file.checksum(),
-                sizes.data_checksum
-            );
-            println!(
-                "DATA COMPUTED={:?} FROM_FILE={:?}",
-                shape_file.checksum(),
-                sizes.shape_checksum
-            );
-            println!(
-                "DATA COMPUTED={:?} FROM_FILE={:?}",
-                shape_index_file.checksum(),
-                sizes.shape_index_checksum
-            );
-            println!(
-                "DATA COMPUTED={:?} FROM_FILE={:?}",
-                commit_index_file.checksum(),
-                sizes.commit_index_checksum
-            );
-            println!(
-                "DATA COMPUTED={:?} FROM_FILE={:?}",
-                strings_file.checksum(),
-                sizes.strings_checksum
-            );
-            println!(
-                "DATA COMPUTED={:?} FROM_FILE={:?}",
-                big_strings_file.checksum(),
-                sizes.big_strings_checksum
-            );
-            println!(
-                "DATA COMPUTED={:?} FROM_FILE={:?}",
-                hashes_file.checksum(),
-                sizes.hashes_checksum
-            );
 
             if data_file.checksum() != sizes.data_checksum
                 || shape_file.checksum() != sizes.shape_checksum
@@ -357,15 +296,12 @@ impl Persistent {
                 || big_strings_file.checksum() != sizes.big_strings_checksum
                 || hashes_file.checksum() != sizes.hashes_checksum
             {
-                // The actual file is smaller than what is in our `sizes.db` file
-                // Go to the previous commit
+                // Checksums do not match
                 break;
             }
 
             valid = Some(sizes.clone());
         }
-
-        println!("VALID={:?}", valid);
 
         let sizes = match valid {
             Some(valid) => valid,
@@ -489,6 +425,34 @@ impl Persistent {
         Ok(())
     }
 
+    fn reload_database(&mut self) -> Result<(), IndexInitializationError> {
+        let list_sizes = FileSizes::make_list_from_file(&self.sizes_file);
+
+        let commit_counter = Self::truncate_files_with_correct_sizes(
+            list_sizes.as_ref().map(AsRef::as_ref),
+            &mut self.data_file,
+            &mut self.shape_file,
+            &mut self.shape_index_file,
+            &mut self.commit_index_file,
+            &mut self.strings_file,
+            &mut self.big_strings_file,
+            &mut self.hashes.hashes_file,
+        )?;
+
+        let shapes =
+            DirectoryShapes::deserialize(&mut self.shape_file, &mut self.shape_index_file)?;
+        let string_interner =
+            StringInterner::deserialize(&mut self.strings_file, &mut self.big_strings_file)?;
+        let context_hashes = deserialize_commit_index(&self.commit_index_file)?;
+
+        self.shapes = shapes;
+        self.string_interner = string_interner;
+        self.context_hashes = context_hashes;
+        self.commit_counter = commit_counter;
+
+        Ok(())
+    }
+
     fn get_file_sizes(&self) -> FileSizes {
         FileSizes {
             commit_counter: self.commit_counter,
@@ -592,17 +556,15 @@ impl FileSizes {
             list_sizes.push(sizes);
         }
 
-        list_sizes.sort_unstable_by_key(|sizes| sizes.commit_counter);
+        list_sizes.sort_unstable_by_key(|sizes| sizes.data_size);
 
         Some(list_sizes)
     }
 }
 
-fn deserialize_hashes(
-    hashes_file: File<{ TAG_HASHES }>,
+fn deserialize_commit_index(
     commit_index_file: &File<{ TAG_COMMIT_INDEX }>,
-) -> Result<(Hashes, Map<u64, ObjectReference>), DeserializationError> {
-    let hashes = Hashes::try_new(hashes_file);
+) -> Result<Map<u64, ObjectReference>, DeserializationError> {
     let mut context_hashes: Map<u64, ObjectReference> = Default::default();
 
     let mut offset = commit_index_file.start();
@@ -635,7 +597,7 @@ fn deserialize_hashes(
         context_hashes.insert(hashed, object_reference);
     }
 
-    Ok((hashes, context_hashes))
+    Ok(context_hashes)
 }
 
 fn serialize_context_hash(
@@ -658,6 +620,15 @@ fn serialize_context_hash(
 }
 
 impl KeyValueStoreBackend for Persistent {
+    fn reload_database(&mut self) -> Result<(), DBError> {
+        if let Err(e) = self.reload_database() {
+            eprintln!("Failed to reload database: {:?}", e);
+            return Err(e.into());
+        }
+
+        Ok(())
+    }
+
     fn contains(&self, hash_id: HashId) -> Result<bool, DBError> {
         self.hashes.contains(hash_id)
     }
@@ -709,13 +680,18 @@ impl KeyValueStoreBackend for Persistent {
         let commit_index_total_bytes = self.context_hashes.capacity()
             * (std::mem::size_of::<ObjectReference>() + std::mem::size_of::<u64>());
 
+        let total_bytes = (hashes_capacity * std::mem::size_of::<ObjectHash>())
+            + strings_total_bytes
+            + shapes_total_bytes
+            + commit_index_total_bytes;
+
         RepositoryMemoryUsage {
             values_bytes: 0,
             values_capacity: 0,
             values_length: 0,
             hashes_capacity,
             hashes_length: 0,
-            total_bytes: strings_total_bytes + hashes_capacity,
+            total_bytes,
             npending_free_ids: 0,
             gc_npending_free_ids: 0,
             nshapes: self.shapes.nshapes(),
@@ -883,7 +859,6 @@ mod tests {
     // Make sure that the commit index is correctly serialized & deserialized
     #[test]
     fn test_commit_index() {
-        let hashes_file = File::<{ TAG_HASHES }>::try_new("test_commit_index").unwrap();
         let mut commit_index_file =
             File::<{ TAG_COMMIT_INDEX }>::try_new("test_commit_index").unwrap();
 
@@ -907,9 +882,9 @@ mod tests {
         .unwrap();
         commit_index_file.append(bytes).unwrap();
 
-        let res = deserialize_hashes(hashes_file, &commit_index_file).unwrap();
+        let res = deserialize_commit_index(&commit_index_file).unwrap();
 
-        let mut values: Vec<_> = res.1.values().collect();
+        let mut values: Vec<_> = res.values().collect();
         values.sort_by_key(|k| k.offset().as_u64());
 
         assert_eq!(
@@ -921,7 +896,6 @@ mod tests {
             ]
         );
 
-        std::fs::remove_file("test_commit_index/hashes.db").ok();
         std::fs::remove_file("test_commit_index/commit_index.db").ok();
     }
 }
