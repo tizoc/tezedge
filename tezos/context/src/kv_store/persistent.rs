@@ -1019,7 +1019,7 @@ mod tests {
         .unwrap();
         commit_index_file.append(bytes).unwrap();
 
-        let res = deserialize_commit_index(&commit_index_file).unwrap();
+        let res = deserialize_commit_index(commit_index_file).unwrap();
 
         let mut values: Vec<_> = res.values().collect();
         values.sort_by_key(|k| k.offset().as_u64());
