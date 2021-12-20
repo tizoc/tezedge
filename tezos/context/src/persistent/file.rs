@@ -321,6 +321,7 @@ impl<const T: TaggedFile> File<T> {
 
         self.crc32.update(bytes);
         self.offset += bytes.len() as u64;
+        self.checksum_computed_until = self.offset;
         self.file.write_all(bytes)
     }
 
