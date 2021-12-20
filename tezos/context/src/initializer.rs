@@ -3,6 +3,7 @@
 
 use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use ipc::IpcError;
 use ocaml_interop::BoxRoot;
@@ -50,8 +51,8 @@ pub enum IndexInitializationError {
         #[from]
         reason: LockDatabaseError,
     },
-    #[error("Sizes of the files do not match values in `sizes.db`")]
-    InvalidSizesOfFiles,
+    #[error("Sizes & checksums of the files do not match values in `sizes.db`")]
+    InvalidIntegrity,
 }
 
 fn spawn_reload_database(
@@ -61,32 +62,32 @@ fn spawn_reload_database(
     let (sender, recv) = std::sync::mpsc::channel();
 
     let result = thread.spawn(move || {
-        println!("Reloading context");
+        log!("Reloading context");
         let mut repository = match repository.write() {
             Ok(repository) => repository,
             Err(e) => {
-                eprintln!("Failed to lock repository for reloading: {:?}", e);
+                elog!("Failed to lock repository for reloading: {:?}", e);
                 return;
             }
         };
 
-        // Notify the main thread that the repository was locked
+        // Notify the main thread that the repository is locked
         if let Err(e) = sender.send(()) {
-            eprintln!("Failed to notify main thread that repo is locked: {:?}", e);
+            elog!("Failed to notify main thread that repo is locked: {:?}", e);
         }
 
         if let Err(e) = repository.reload_database() {
-            eprintln!("Failed to reload repository: {:?}", e);
+            elog!("Failed to reload repository: {:?}", e);
         }
-        println!("Context reloaded");
+        log!("Context reloaded");
     });
 
     // Wait for the spawned thread to lock the repository.
     // This is necessary to make sure that `TezedgeIndex` doesn't start
     // processing queries without having the repository synchronized
     // with data on disk
-    if let Err(e) = recv.recv() {
-        eprintln!("Failed to get notified that repo is locked: {:?}", e);
+    if let Err(e) = recv.recv_timeout(Duration::from_secs(10)) {
+        elog!("Failed to get notified that repo is locked: {:?}", e);
     }
 
     result
@@ -112,7 +113,7 @@ pub fn initialize_tezedge_index(
     // We reload the database in another thread, to avoid blocking on
     // `initialize_tezedge_index`: Reloading can take lots of time
     if let Err(e) = spawn_reload_database(Arc::clone(&repository)) {
-        eprintln!("Failed to spawn thread to reload database: {:?}", e);
+        elog!("Failed to spawn thread to reload database: {:?}", e);
     }
 
     Ok(TezedgeIndex::new(repository, patch_context))

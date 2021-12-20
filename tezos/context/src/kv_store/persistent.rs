@@ -264,7 +264,8 @@ impl Persistent {
             None => return Ok(0), // New database
         };
 
-        let mut valid = Option::<FileSizes>::None;
+        // We take the last valid in `list_sizes`
+        let mut last_valid = Option::<FileSizes>::None;
 
         for sizes in list_sizes.iter() {
             if data_file.offset().as_u64() < sizes.data_size
@@ -275,41 +276,127 @@ impl Persistent {
                 || big_strings_file.offset().as_u64() < sizes.big_strings_size
                 || hashes_file.offset().as_u64() < sizes.hashes_size
             {
+                elog!(
+                    "Sizes of files do not match:\n
+data_file={:?} != {:?}\n
+shape_file={:?} != {:?}\n
+shape_index_file={:?} != {:?}\n
+commit_index_file={:?} != {:?}\n
+strings_file={:?} != {:?}\n
+big_strings_file={:?} != {:?}\n
+hashes_file={:?} != {:?}",
+                    data_file.offset().as_u64(),
+                    sizes.data_size,
+                    shape_file.offset().as_u64(),
+                    sizes.shape_size,
+                    shape_index_file.offset().as_u64(),
+                    sizes.shape_index_size,
+                    commit_index_file.offset().as_u64(),
+                    sizes.commit_index_size,
+                    strings_file.offset().as_u64(),
+                    sizes.strings_size,
+                    big_strings_file.offset().as_u64(),
+                    sizes.big_strings_size,
+                    hashes_file.offset().as_u64(),
+                    sizes.hashes_size,
+                );
+
                 // The actual file is smaller than what is in our `sizes.db` file
                 // Ignore following sizes as they contains bigger sizes
                 break;
             }
 
-            data_file.update_checksum_until(sizes.data_size);
-            shape_file.update_checksum_until(sizes.shape_size);
-            shape_index_file.update_checksum_until(sizes.shape_index_size);
-            commit_index_file.update_checksum_until(sizes.commit_index_size);
-            strings_file.update_checksum_until(sizes.strings_size);
-            big_strings_file.update_checksum_until(sizes.big_strings_size);
-            hashes_file.update_checksum_until(sizes.hashes_size);
+            // Compute the checksum of each file
+            // We start with smaller files to fail early
 
-            if data_file.checksum() != sizes.data_checksum
-                || shape_file.checksum() != sizes.shape_checksum
-                || shape_index_file.checksum() != sizes.shape_index_checksum
-                || commit_index_file.checksum() != sizes.commit_index_checksum
-                || strings_file.checksum() != sizes.strings_checksum
-                || big_strings_file.checksum() != sizes.big_strings_checksum
-                || hashes_file.checksum() != sizes.hashes_checksum
-            {
-                // Checksums do not match
+            if strings_file.update_checksum_until(sizes.strings_size) != sizes.strings_checksum {
+                elog!(
+                    "Checksum of strings file do not match: {:?} != {:?} at offset {:?}",
+                    strings_file.checksum(),
+                    sizes.strings_checksum,
+                    sizes.strings_size
+                );
                 break;
             }
 
-            valid = Some(sizes.clone());
+            if commit_index_file.update_checksum_until(sizes.commit_index_size)
+                != sizes.commit_index_checksum
+            {
+                elog!(
+                    "Checksum of commit_index file do not match: {:?} != {:?} at offset {:?}",
+                    commit_index_file.checksum(),
+                    sizes.commit_index_checksum,
+                    sizes.commit_index_size
+                );
+                break;
+            }
+
+            if shape_index_file.update_checksum_until(sizes.shape_index_size)
+                != sizes.shape_index_checksum
+            {
+                elog!(
+                    "Checksum of shape index file do not match: {:?} != {:?} at offset {:?}",
+                    shape_index_file.checksum(),
+                    sizes.shape_index_checksum,
+                    sizes.shape_index_size
+                );
+                break;
+            }
+
+            if big_strings_file.update_checksum_until(sizes.big_strings_size)
+                != sizes.big_strings_checksum
+            {
+                elog!(
+                    "Checksum of strings file do not match: {:?} != {:?} at offset {:?}",
+                    big_strings_file.checksum(),
+                    sizes.big_strings_checksum,
+                    sizes.big_strings_size
+                );
+                break;
+            }
+
+            if shape_file.update_checksum_until(sizes.shape_size) != sizes.shape_checksum {
+                elog!(
+                    "Checksum of shape file do not match: {:?} != {:?} at offset {:?}",
+                    shape_file.checksum(),
+                    sizes.shape_checksum,
+                    sizes.shape_size
+                );
+                break;
+            }
+
+            if hashes_file.update_checksum_until(sizes.hashes_size) != sizes.hashes_checksum {
+                elog!(
+                    "Checksum of shape file do not match: {:?} != {:?} at offset {:?}",
+                    hashes_file.checksum(),
+                    sizes.hashes_checksum,
+                    sizes.hashes_size
+                );
+                break;
+            }
+
+            if data_file.update_checksum_until(sizes.data_size) != sizes.data_checksum {
+                elog!(
+                    "Checksum of data file do not match: {:?} != {:?} at offset {:?}",
+                    data_file.checksum(),
+                    sizes.data_checksum,
+                    sizes.data_size
+                );
+                break;
+            }
+
+            last_valid = Some(sizes.clone());
         }
 
-        let sizes = match valid {
+        let sizes = match last_valid {
             Some(valid) => valid,
             None => {
                 // If we reach here, it means that none of the sizes & checksum in `sizes.db` are correct
-                return Err(IndexInitializationError::InvalidSizesOfFiles);
+                return Err(IndexInitializationError::InvalidIntegrity);
             }
         };
+
+        log!("Using the following sizes/checksum: {:#?}", sizes);
 
         data_file.truncate_with_checksum(sizes.data_size, sizes.data_checksum)?;
         shape_file.truncate_with_checksum(sizes.shape_size, sizes.shape_checksum)?;
@@ -622,7 +709,7 @@ fn serialize_context_hash(
 impl KeyValueStoreBackend for Persistent {
     fn reload_database(&mut self) -> Result<(), DBError> {
         if let Err(e) = self.reload_database() {
-            eprintln!("Failed to reload database: {:?}", e);
+            elog!("Failed to reload database: {:?}", e);
             return Err(e.into());
         }
 

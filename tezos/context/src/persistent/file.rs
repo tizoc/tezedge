@@ -235,7 +235,9 @@ impl<const T: TaggedFile> File<T> {
         Ok(())
     }
 
-    pub fn update_checksum_until(&mut self, end: u64) {
+    /// Compute the checksum of the file from `Self::checksum_computed_until` until `end`
+    /// and return it
+    pub fn update_checksum_until(&mut self, end: u64) -> u32 {
         let mut buffer = vec![0; 64 * 1024];
         let mut offset = self.checksum_computed_until;
 
@@ -256,6 +258,7 @@ impl<const T: TaggedFile> File<T> {
         }
 
         self.checksum_computed_until = end;
+        self.checksum()
     }
 
     pub fn truncate_with_checksum(
