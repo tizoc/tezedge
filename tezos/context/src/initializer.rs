@@ -53,6 +53,8 @@ pub enum IndexInitializationError {
     },
     #[error("Sizes & checksums of the files do not match values in `sizes.db`")]
     InvalidIntegrity,
+    #[error("Failed to join deserializing thread: {reason}")]
+    ThreadJoinError { reason: String },
 }
 
 fn spawn_reload_database(

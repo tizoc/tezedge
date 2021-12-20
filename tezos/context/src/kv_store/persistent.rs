@@ -261,7 +261,17 @@ impl Persistent {
     ) -> Result<u64, IndexInitializationError> {
         let list_sizes = match list_sizes {
             Some(list) => list,
-            None => return Ok(0), // New database
+            None => {
+                // New database, or the file `sizes.db` doesn't exist
+                data_file.update_checksum_until(data_file.offset().as_u64());
+                commit_index_file.update_checksum_until(commit_index_file.offset().as_u64());
+                shape_file.update_checksum_until(shape_file.offset().as_u64());
+                shape_index_file.update_checksum_until(shape_index_file.offset().as_u64());
+                strings_file.update_checksum_until(strings_file.offset().as_u64());
+                big_strings_file.update_checksum_until(big_strings_file.offset().as_u64());
+                hashes_file.update_checksum_until(hashes_file.offset().as_u64());
+                return Ok(0);
+            }
         };
 
         // We take the last valid in `list_sizes`
@@ -347,7 +357,7 @@ hashes_file={:?} != {:?}",
                 != sizes.big_strings_checksum
             {
                 elog!(
-                    "Checksum of strings file do not match: {:?} != {:?} at offset {:?}",
+                    "Checksum of big strings file do not match: {:?} != {:?} at offset {:?}",
                     big_strings_file.checksum(),
                     sizes.big_strings_checksum,
                     sizes.big_strings_size
@@ -367,7 +377,7 @@ hashes_file={:?} != {:?}",
 
             if hashes_file.update_checksum_until(sizes.hashes_size) != sizes.hashes_checksum {
                 elog!(
-                    "Checksum of shape file do not match: {:?} != {:?} at offset {:?}",
+                    "Checksum of hashes file do not match: {:?} != {:?} at offset {:?}",
                     hashes_file.checksum(),
                     sizes.hashes_checksum,
                     sizes.hashes_size
@@ -526,11 +536,51 @@ hashes_file={:?} != {:?}",
             &mut self.hashes.hashes_file,
         )?;
 
+        // Clone the `File` to deserialize them in other threads
+        let shape_file = self.shape_file.try_clone()?;
+        let shape_index_file = self.shape_index_file.try_clone()?;
+        let strings_file = self.strings_file.try_clone()?;
+        let big_strings_file = self.big_strings_file.try_clone()?;
+        let commit_index_file = self.commit_index_file.try_clone()?;
+
+        // Spawn the deserializers
+        let thread_shapes = std::thread::spawn(move || {
+            log!("Deserializing shapes..");
+            let result = DirectoryShapes::deserialize(shape_file, shape_index_file);
+            log!("Shapes deserialized");
+            result
+        });
+        let thread_strings = std::thread::spawn(move || {
+            log!("Deserializing strings..");
+            let result = StringInterner::deserialize(strings_file, big_strings_file);
+            log!("Strings deserialized");
+            result
+        });
+        let thread_commit_index = std::thread::spawn(move || {
+            log!("Deserializing commit index..");
+            let result = deserialize_commit_index(commit_index_file);
+            log!("Commit index deserialized");
+            result
+        });
+
+        // Gather results
+        let context_hashes = thread_commit_index.join().map_err(|e| {
+            IndexInitializationError::ThreadJoinError {
+                reason: format!("{:?}", e),
+            }
+        })??;
         let shapes =
-            DirectoryShapes::deserialize(&mut self.shape_file, &mut self.shape_index_file)?;
+            thread_shapes
+                .join()
+                .map_err(|e| IndexInitializationError::ThreadJoinError {
+                    reason: format!("{:?}", e),
+                })??;
         let string_interner =
-            StringInterner::deserialize(&mut self.strings_file, &mut self.big_strings_file)?;
-        let context_hashes = deserialize_commit_index(&self.commit_index_file)?;
+            thread_strings
+                .join()
+                .map_err(|e| IndexInitializationError::ThreadJoinError {
+                    reason: format!("{:?}", e),
+                })??;
 
         self.shapes = shapes;
         self.string_interner = string_interner;
@@ -650,7 +700,7 @@ impl FileSizes {
 }
 
 fn deserialize_commit_index(
-    commit_index_file: &File<{ TAG_COMMIT_INDEX }>,
+    commit_index_file: File<{ TAG_COMMIT_INDEX }>,
 ) -> Result<Map<u64, ObjectReference>, DeserializationError> {
     let mut context_hashes: Map<u64, ObjectReference> = Default::default();
 

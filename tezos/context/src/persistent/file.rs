@@ -194,6 +194,15 @@ impl<const T: TaggedFile> File<T> {
         Ok(file)
     }
 
+    pub fn try_clone(&self) -> std::io::Result<Self> {
+        Ok(Self {
+            file: self.file.try_clone()?,
+            offset: self.offset,
+            checksum_computed_until: self.checksum_computed_until,
+            crc32: self.crc32.clone(),
+        })
+    }
+
     fn write_header(&mut self) -> Result<(), io::Error> {
         let mut bytes = Vec::with_capacity(16);
 
