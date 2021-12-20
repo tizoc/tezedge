@@ -288,13 +288,13 @@ impl Persistent {
             {
                 elog!(
                     "Sizes of files do not match:\n
-data_file={:?} != {:?}\n
-shape_file={:?} != {:?}\n
-shape_index_file={:?} != {:?}\n
-commit_index_file={:?} != {:?}\n
-strings_file={:?} != {:?}\n
-big_strings_file={:?} != {:?}\n
-hashes_file={:?} != {:?}",
+data_file={:?}, in sizes.db={:?}\n
+shape_file={:?}, in sizes.db={:?}\n
+shape_index_file={:?}, in sizes.db={:?}\n
+commit_index_file={:?}, in sizes.db={:?}\n
+strings_file={:?}, in sizes.db={:?}\n
+big_strings_file={:?}, in sizes.db={:?}\n
+hashes_file={:?}, in sizes.db={:?}",
                     data_file.offset().as_u64(),
                     sizes.data_size,
                     shape_file.offset().as_u64(),
@@ -406,7 +406,7 @@ hashes_file={:?} != {:?}",
             }
         };
 
-        log!("Using the following sizes/checksum: {:#?}", sizes);
+        log!("Found a valid set of sizes and checksums");
 
         data_file.truncate_with_checksum(sizes.data_size, sizes.data_checksum)?;
         shape_file.truncate_with_checksum(sizes.shape_size, sizes.shape_checksum)?;
