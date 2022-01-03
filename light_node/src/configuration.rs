@@ -26,7 +26,7 @@ use tezos_api::environment::{TezosEnvironment, ZcashParams};
 use tezos_context_api::{
     ContextKvStoreConfiguration, PatchContext, SupportedContextKeyValueStore,
     TezosContextIrminStorageConfiguration, TezosContextStorageConfiguration,
-    TezosContextTezEdgeStorageConfiguration,
+    TezosContextTezEdgeStorageConfiguration, TezosContextTezedgeOnDiskBackendOptions,
 };
 
 #[derive(Debug, Clone)]
@@ -1093,18 +1093,14 @@ impl Environment {
                         SupportedContextKeyValueStore::InMem => ContextKvStoreConfiguration::InMem,
                         SupportedContextKeyValueStore::OnDisk => {
                             ContextKvStoreConfiguration::OnDisk(
-                                get_final_path(&tezos_data_dir, "context".into())
-                                    .into_os_string()
-                                    .into_string()
-                                    .unwrap(),
+                                TezosContextTezedgeOnDiskBackendOptions {
+                                    base_path: get_final_path(&tezos_data_dir, "context".into())
+                                        .into_os_string()
+                                        .into_string()
+                                        .unwrap(),
+                                    startup_check: tezedge_enable_integrity_checks,
+                                },
                             )
-                            // ContextKvStoreConfiguration::OnDisk {
-                            //     base_path: get_final_path(&tezos_data_dir, "context".into())
-                            //         .into_os_string()
-                            //         .into_string()
-                            //         .unwrap(),
-                            //     enable_checksum: tezedge_enable_integrity_checks,
-                            // }
                         }
                     })
                     .unwrap_or_else(|e| {

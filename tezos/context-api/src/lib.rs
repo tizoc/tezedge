@@ -64,14 +64,17 @@ pub struct TezosContextIrminStorageConfiguration {
 
 // Must be in sync with ffi_config.ml
 #[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct TezosContextTezedgeOnDiskBackendOptions {
+    pub base_path: String,
+    pub startup_check: bool,
+}
+
+// Must be in sync with ffi_config.ml
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum ContextKvStoreConfiguration {
     ReadOnlyIpc,
     InMem,
-    OnDisk(String),
-    // OnDisk {
-    //     base_path: String,
-    //     enable_checksum: bool,
-    // },
+    OnDisk(TezosContextTezedgeOnDiskBackendOptions),
 }
 
 // Must be in sync with ffi_config.ml
