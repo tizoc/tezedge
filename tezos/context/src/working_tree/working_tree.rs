@@ -171,36 +171,7 @@ impl TreeWalkerLevel {
 
         let children_iter = if should_continue {
             if let WorkingTreeRoot::Directory(dir_id) = &root.root {
-                let mut storage = root.index.storage.borrow_mut();
-                let mut strings = root.index.get_string_interner().unwrap();
-
-                let dir = if let Some(repo) = root.index.repository.read().ok() {
-                    match storage.dir_to_vec_sorted(*dir_id, &mut strings, &*repo) {
-                        Ok(dir) => dir,
-                        Err(e) => {
-                            eprintln!("TreeWalkerLevel `dir_to_vec_sorted` error='{:?}'", e);
-                            Vec::new()
-                        }
-                    }
-                } else {
-                    eprintln!("TreeWalkerLevel Failed to lock repository");
-                    Vec::new()
-                };
-
-                let dir_vec: Vec<(String, DirEntryId)> = dir
-                    .into_iter()
-                    .map(|(key_id, dir_entry_id)| {
-                        (
-                            strings
-                                .get_str(key_id)
-                                .map(|s| s.to_string())
-                                // Never fail, the error would have been caught above with `dir_to_vec_sorted`.
-                                .unwrap_or_default(),
-                            dir_entry_id,
-                        )
-                    })
-                    .collect();
-
+                let dir_vec = Self::get_keys_on_directory(&root, *dir_id);
                 Some(dir_vec.into_iter())
             } else {
                 None
@@ -216,6 +187,49 @@ impl TreeWalkerLevel {
             yield_self: depth.map(|d| d.should_apply(current_depth)).unwrap_or(true),
             children_iter,
         }
+    }
+
+    fn get_keys_on_directory(root: &WorkingTree, dir_id: DirectoryId) -> Vec<(String, DirEntryId)> {
+        let mut storage = root.index.storage.borrow_mut();
+        let mut strings = match root.index.get_string_interner() {
+            Ok(strings) => strings,
+            Err(e) => {
+                eprintln!(
+                    "TreeWalkerLevel: Failed to get the string interner: {:?}",
+                    e
+                );
+                return Vec::new();
+            }
+        };
+
+        let repository = match root.index.repository.read() {
+            Ok(repo) => repo,
+            Err(e) => {
+                eprintln!("TreeWalkerLevel Failed to lock repository: {:?}", e);
+                return Vec::new();
+            }
+        };
+
+        let dir = match storage.dir_to_vec_sorted(dir_id, &mut strings, &*repository) {
+            Ok(dir) => dir,
+            Err(e) => {
+                eprintln!("TreeWalkerLevel `dir_to_vec_sorted` failed '{:?}'", e);
+                Vec::new()
+            }
+        };
+
+        dir.into_iter()
+            .map(|(key_id, dir_entry_id)| {
+                (
+                    strings
+                        .get_str(key_id)
+                        .map(|s| s.to_string())
+                        // Never fail, the error would have been caught above with `dir_to_vec_sorted`.
+                        .unwrap_or_default(),
+                    dir_entry_id,
+                )
+            })
+            .collect()
     }
 }
 
@@ -783,12 +797,15 @@ impl WorkingTree {
         }
 
         let mut storage = self.index.storage.borrow_mut();
-        let mut strings = self.index.get_string_interner().unwrap();
 
         match self
             .index
-            .find_dir_entry(dir_id, key, &mut storage, &mut strings)
-        {
+            .get_string_interner()
+            .map_err(MerkleError::from)
+            .and_then(|mut strings| {
+                self.index
+                    .find_dir_entry(dir_id, key, &mut storage, &mut strings)
+            }) {
             Ok(dir_entry_id) => dir_entry_id.is_some(),
             Err(_) => false,
         }

@@ -246,7 +246,7 @@ impl<const T: TaggedFile> File<T> {
 
     /// Compute the checksum of the file from `Self::checksum_computed_until` until `end`
     /// and return it
-    pub fn update_checksum_until(&mut self, end: u64) -> u32 {
+    pub fn update_checksum_until(&mut self, end: u64) -> Result<u32, io::Error> {
         let mut buffer = vec![0; 64 * 1024];
         let mut offset = self.checksum_computed_until;
 
@@ -259,7 +259,7 @@ impl<const T: TaggedFile> File<T> {
 
             let buffer = &mut buffer[..length_to_read];
 
-            self.read_exact_at(buffer, (offset as u64).into()).unwrap();
+            self.read_exact_at(buffer, (offset as u64).into())?;
             offset += buffer.len() as u64;
             self.crc32.update(buffer);
 
@@ -267,7 +267,7 @@ impl<const T: TaggedFile> File<T> {
         }
 
         self.checksum_computed_until = end;
-        self.checksum()
+        Ok(self.checksum())
     }
 
     pub fn truncate_with_checksum(

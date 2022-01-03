@@ -263,13 +263,13 @@ impl Persistent {
             Some(list) => list,
             None => {
                 // New database, or the file `sizes.db` doesn't exist
-                data_file.update_checksum_until(data_file.offset().as_u64());
-                commit_index_file.update_checksum_until(commit_index_file.offset().as_u64());
-                shape_file.update_checksum_until(shape_file.offset().as_u64());
-                shape_index_file.update_checksum_until(shape_index_file.offset().as_u64());
-                strings_file.update_checksum_until(strings_file.offset().as_u64());
-                big_strings_file.update_checksum_until(big_strings_file.offset().as_u64());
-                hashes_file.update_checksum_until(hashes_file.offset().as_u64());
+                data_file.update_checksum_until(data_file.offset().as_u64())?;
+                commit_index_file.update_checksum_until(commit_index_file.offset().as_u64())?;
+                shape_file.update_checksum_until(shape_file.offset().as_u64())?;
+                shape_index_file.update_checksum_until(shape_index_file.offset().as_u64())?;
+                strings_file.update_checksum_until(strings_file.offset().as_u64())?;
+                big_strings_file.update_checksum_until(big_strings_file.offset().as_u64())?;
+                hashes_file.update_checksum_until(hashes_file.offset().as_u64())?;
                 return Ok(0);
             }
         };
@@ -319,7 +319,7 @@ hashes_file={:?}, in sizes.db={:?}",
             // Compute the checksum of each file
             // We start with smaller files to fail early
 
-            if strings_file.update_checksum_until(sizes.strings_size) != sizes.strings_checksum {
+            if strings_file.update_checksum_until(sizes.strings_size)? != sizes.strings_checksum {
                 elog!(
                     "Checksum of strings file do not match: {:?} != {:?} at offset {:?}",
                     strings_file.checksum(),
@@ -329,7 +329,7 @@ hashes_file={:?}, in sizes.db={:?}",
                 break;
             }
 
-            if commit_index_file.update_checksum_until(sizes.commit_index_size)
+            if commit_index_file.update_checksum_until(sizes.commit_index_size)?
                 != sizes.commit_index_checksum
             {
                 elog!(
@@ -341,7 +341,7 @@ hashes_file={:?}, in sizes.db={:?}",
                 break;
             }
 
-            if shape_index_file.update_checksum_until(sizes.shape_index_size)
+            if shape_index_file.update_checksum_until(sizes.shape_index_size)?
                 != sizes.shape_index_checksum
             {
                 elog!(
@@ -353,7 +353,7 @@ hashes_file={:?}, in sizes.db={:?}",
                 break;
             }
 
-            if big_strings_file.update_checksum_until(sizes.big_strings_size)
+            if big_strings_file.update_checksum_until(sizes.big_strings_size)?
                 != sizes.big_strings_checksum
             {
                 elog!(
@@ -365,7 +365,7 @@ hashes_file={:?}, in sizes.db={:?}",
                 break;
             }
 
-            if shape_file.update_checksum_until(sizes.shape_size) != sizes.shape_checksum {
+            if shape_file.update_checksum_until(sizes.shape_size)? != sizes.shape_checksum {
                 elog!(
                     "Checksum of shape file do not match: {:?} != {:?} at offset {:?}",
                     shape_file.checksum(),
@@ -375,7 +375,7 @@ hashes_file={:?}, in sizes.db={:?}",
                 break;
             }
 
-            if hashes_file.update_checksum_until(sizes.hashes_size) != sizes.hashes_checksum {
+            if hashes_file.update_checksum_until(sizes.hashes_size)? != sizes.hashes_checksum {
                 elog!(
                     "Checksum of hashes file do not match: {:?} != {:?} at offset {:?}",
                     hashes_file.checksum(),
@@ -385,7 +385,7 @@ hashes_file={:?}, in sizes.db={:?}",
                 break;
             }
 
-            if data_file.update_checksum_until(sizes.data_size) != sizes.data_checksum {
+            if data_file.update_checksum_until(sizes.data_size)? != sizes.data_checksum {
                 elog!(
                     "Checksum of data file do not match: {:?} != {:?} at offset {:?}",
                     data_file.checksum(),
@@ -504,7 +504,7 @@ hashes_file={:?}, in sizes.db={:?}",
     fn update_sizes_to_disk(&mut self) -> Result<(), std::io::Error> {
         // Gather all the file sizes + counter in a `Vec<u8>`
         let file_sizes = self.get_file_sizes();
-        let file_sizes_bytes = serialize_file_sizes(&file_sizes);
+        let file_sizes_bytes = serialize_file_sizes(&file_sizes)?;
 
         // Compute the hash of `file_sizes_bytes`
         let mut hasher = VarBlake2b::new(SIZES_HASH_BYTES_LENGTH).unwrap();
@@ -629,11 +629,18 @@ hashes_file={:?}, in sizes.db={:?}",
     }
 }
 
-fn serialize_file_sizes(file_sizes: &FileSizes) -> Vec<u8> {
-    let output = bincode::serialize(file_sizes).unwrap();
+fn serialize_file_sizes(file_sizes: &FileSizes) -> std::io::Result<Vec<u8>> {
+    use std::io::{Error, ErrorKind};
+
+    let output = bincode::serialize(file_sizes).map_err(|e| {
+        Error::new(
+            ErrorKind::Other,
+            format!("Failed to serialize file sizes: {:?}", e),
+        )
+    })?;
 
     debug_assert_eq!(output.len(), SIZES_REST_BYTES_LENGTH);
-    output
+    Ok(output)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -688,7 +695,13 @@ impl FileSizes {
                 continue;
             }
 
-            let sizes: FileSizes = bincode::deserialize(rest).unwrap();
+            let sizes: FileSizes = match bincode::deserialize(rest) {
+                Ok(sizes) => sizes,
+                Err(e) => {
+                    elog!("Failed to deserialize sizes, skipping this line: {:?}", e);
+                    continue;
+                }
+            };
 
             list_sizes.push(sizes);
         }
