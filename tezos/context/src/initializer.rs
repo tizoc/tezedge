@@ -108,7 +108,11 @@ pub fn initialize_tezedge_index(
         },
         ContextKvStoreConfiguration::InMem => Arc::new(RwLock::new(InMemory::try_new()?)),
         ContextKvStoreConfiguration::OnDisk(ref db_path) => {
-            Arc::new(RwLock::new(Persistent::try_new(Some(db_path.as_str()))?))
+            let enable_checksums: bool = true;
+            Arc::new(RwLock::new(Persistent::try_new(
+                Some(db_path.as_str()),
+                enable_checksums,
+            )?))
         }
     };
 

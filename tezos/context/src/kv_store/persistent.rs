@@ -117,6 +117,7 @@ pub struct Persistent {
     /// [Hash of the following bytes, commit counter, file 1 size, file 2 size, .., file X size]
     /// This repeats 10 times
     sizes_file: File<{ TAG_SIZES }>,
+    enable_checksum: bool,
 }
 
 impl NotGarbageCollected for Persistent {}
@@ -216,7 +217,10 @@ impl Hashes {
 }
 
 impl Persistent {
-    pub fn try_new(db_path: Option<&str>) -> Result<Persistent, IndexInitializationError> {
+    pub fn try_new(
+        db_path: Option<&str>,
+        enable_checksum: bool,
+    ) -> Result<Persistent, IndexInitializationError> {
         let base_path = get_persistent_base_path(db_path);
 
         let lock_file = Lock::try_lock(&base_path)?;
@@ -246,6 +250,7 @@ impl Persistent {
             lock_file,
             commit_counter: Default::default(),
             sizes_file,
+            enable_checksum,
         })
     }
 
@@ -258,6 +263,7 @@ impl Persistent {
         strings_file: &mut File<{ TAG_STRINGS }>,
         big_strings_file: &mut File<{ TAG_BIG_STRINGS }>,
         hashes_file: &mut File<{ TAG_HASHES }>,
+        enable_checksum: bool,
     ) -> Result<u64, IndexInitializationError> {
         let list_sizes = match list_sizes {
             Some(list) => list,
@@ -319,80 +325,83 @@ hashes_file={:?}, in sizes.db={:?}",
             // Compute the checksum of each file
             // We start with smaller files to fail early
 
-            if strings_file.update_checksum_until(sizes.strings_size)? != sizes.strings_checksum {
-                elog!(
-                    "Checksum of strings file do not match: {:?} != {:?} at offset {:?}",
-                    strings_file.checksum(),
-                    sizes.strings_checksum,
-                    sizes.strings_size
-                );
-                break;
-            }
+            if enable_checksum {
+                if strings_file.update_checksum_until(sizes.strings_size)? != sizes.strings_checksum
+                {
+                    elog!(
+                        "Checksum of strings file do not match: {:?} != {:?} at offset {:?}",
+                        strings_file.checksum(),
+                        sizes.strings_checksum,
+                        sizes.strings_size
+                    );
+                    break;
+                }
 
-            if commit_index_file.update_checksum_until(sizes.commit_index_size)?
-                != sizes.commit_index_checksum
-            {
-                elog!(
-                    "Checksum of commit_index file do not match: {:?} != {:?} at offset {:?}",
-                    commit_index_file.checksum(),
-                    sizes.commit_index_checksum,
-                    sizes.commit_index_size
-                );
-                break;
-            }
+                if commit_index_file.update_checksum_until(sizes.commit_index_size)?
+                    != sizes.commit_index_checksum
+                {
+                    elog!(
+                        "Checksum of commit_index file do not match: {:?} != {:?} at offset {:?}",
+                        commit_index_file.checksum(),
+                        sizes.commit_index_checksum,
+                        sizes.commit_index_size
+                    );
+                    break;
+                }
 
-            if shape_index_file.update_checksum_until(sizes.shape_index_size)?
-                != sizes.shape_index_checksum
-            {
-                elog!(
-                    "Checksum of shape index file do not match: {:?} != {:?} at offset {:?}",
-                    shape_index_file.checksum(),
-                    sizes.shape_index_checksum,
-                    sizes.shape_index_size
-                );
-                break;
-            }
+                if shape_index_file.update_checksum_until(sizes.shape_index_size)?
+                    != sizes.shape_index_checksum
+                {
+                    elog!(
+                        "Checksum of shape index file do not match: {:?} != {:?} at offset {:?}",
+                        shape_index_file.checksum(),
+                        sizes.shape_index_checksum,
+                        sizes.shape_index_size
+                    );
+                    break;
+                }
 
-            if big_strings_file.update_checksum_until(sizes.big_strings_size)?
-                != sizes.big_strings_checksum
-            {
-                elog!(
-                    "Checksum of big strings file do not match: {:?} != {:?} at offset {:?}",
-                    big_strings_file.checksum(),
-                    sizes.big_strings_checksum,
-                    sizes.big_strings_size
-                );
-                break;
-            }
+                if big_strings_file.update_checksum_until(sizes.big_strings_size)?
+                    != sizes.big_strings_checksum
+                {
+                    elog!(
+                        "Checksum of big strings file do not match: {:?} != {:?} at offset {:?}",
+                        big_strings_file.checksum(),
+                        sizes.big_strings_checksum,
+                        sizes.big_strings_size
+                    );
+                    break;
+                }
 
-            if shape_file.update_checksum_until(sizes.shape_size)? != sizes.shape_checksum {
-                elog!(
-                    "Checksum of shape file do not match: {:?} != {:?} at offset {:?}",
-                    shape_file.checksum(),
-                    sizes.shape_checksum,
-                    sizes.shape_size
-                );
-                break;
-            }
+                if shape_file.update_checksum_until(sizes.shape_size)? != sizes.shape_checksum {
+                    elog!(
+                        "Checksum of shape file do not match: {:?} != {:?} at offset {:?}",
+                        shape_file.checksum(),
+                        sizes.shape_checksum,
+                        sizes.shape_size
+                    );
+                    break;
+                }
 
-            if hashes_file.update_checksum_until(sizes.hashes_size)? != sizes.hashes_checksum {
-                elog!(
-                    "Checksum of hashes file do not match: {:?} != {:?} at offset {:?}",
-                    hashes_file.checksum(),
-                    sizes.hashes_checksum,
-                    sizes.hashes_size
-                );
-                break;
-            }
+                if hashes_file.update_checksum_until(sizes.hashes_size)? != sizes.hashes_checksum {
+                    elog!(
+                        "Checksum of hashes file do not match: {:?} != {:?} at offset {:?}",
+                        hashes_file.checksum(),
+                        sizes.hashes_checksum,
+                        sizes.hashes_size
+                    );
+                    break;
+                }
 
-            if data_file.update_checksum_until(sizes.data_size)? != sizes.data_checksum {
-                elog!(
-                    "Checksum of data file do not match: {:?} != {:?} at offset {:?}",
-                    data_file.checksum(),
-                    sizes.data_checksum,
-                    sizes.data_size
-                );
-                break;
+                if data_file.update_checksum_until(sizes.data_size)? != sizes.data_checksum {
+                    elog!(
+                        "Checksum of data file do not match: {:?} != {:?} at offset {:?}",
+                        data_file.checksum(),
+                        sizes.data_checksum,
+                        sizes.data_size
+                    );
+                    break;
+                }
             }
 
             last_valid = Some(sizes.clone());
@@ -534,6 +543,7 @@ hashes_file={:?}, in sizes.db={:?}",
             &mut self.strings_file,
             &mut self.big_strings_file,
             &mut self.hashes.hashes_file,
+            self.enable_checksum,
         )?;
 
         // Clone the `File` to deserialize them in other threads
