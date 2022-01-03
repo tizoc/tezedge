@@ -256,6 +256,12 @@ pub fn tezos_app() -> App<'static, 'static> {
                     }
                 }
             }))
+        .arg(Arg::with_name("tezedge-integrity-check")
+            .long("tezedge-integrity-check")
+            .global(true)
+            .takes_value(true)
+            .value_name("BOOL")
+            .help("Enable or not the integrity check on persistent tezedge context"))
         .arg(Arg::with_name("identity-file")
             .long("identity-file")
             .global(true)
@@ -1072,6 +1078,13 @@ impl Environment {
                             e
                         )
                     });
+
+                let tezedge_enable_integrity_checks = args
+                    .value_of("tezedge-integrity-check")
+                    .unwrap_or("false")
+                    .parse::<bool>()
+                    .expect("Provided value cannot be converted to bool");
+
                 let context_kv_store = args
                     .value_of("context-kv-store")
                     .unwrap_or(Storage::DEFAULT_CONTEXT_KV_STORE_BACKEND)
@@ -1085,6 +1098,13 @@ impl Environment {
                                     .into_string()
                                     .unwrap(),
                             )
+                            // ContextKvStoreConfiguration::OnDisk {
+                            //     base_path: get_final_path(&tezos_data_dir, "context".into())
+                            //         .into_os_string()
+                            //         .into_string()
+                            //         .unwrap(),
+                            //     enable_checksum: tezedge_enable_integrity_checks,
+                            // }
                         }
                     })
                     .unwrap_or_else(|e| {

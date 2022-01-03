@@ -68,6 +68,10 @@ pub enum ContextKvStoreConfiguration {
     ReadOnlyIpc,
     InMem,
     OnDisk(String),
+    // OnDisk {
+    //     base_path: String,
+    //     enable_checksum: bool,
+    // },
 }
 
 // Must be in sync with ffi_config.ml
